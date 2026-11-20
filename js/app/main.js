@@ -9,7 +9,7 @@ import * as codes from './codes.js';
 import * as api from './api.js';
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.4.0';
 
 document.getElementById('ver').textContent = `Ver. ${APP_VERSION} · engine v${ENGINE_VERSION}`;
 
@@ -349,7 +349,7 @@ async function arena() {
     <h2>Arena</h2><p class="sub">${esc(k.name)} · Elo <span class="elo">${k.elo}</span> · Power ${my}<br>
     Condition: ${condBadge(injIds(k))}${injIds(k).length ? ' <button class="linkbtn" data-go="lab">heal</button>' : ''}</p>
     ${dc ? `<div class="warn">⚠ <b>Critical.</b> If ${esc(k.name)} is knocked out, there's a <b>${dc}%</b> chance it dies permanently.</div>` : ''}
-    <p class="sub">Fights run on the server and are automatic. Defenders can be injured but are never killed. ${left ? `${left} rated fights left today.` : '<b>Daily rated fights used up:</b> further fights pay no Biomass or Elo until tomorrow (UTC).'}</p>
+    <p class="sub">Fights run on the server and are automatic. Defenders are never injured or killed. ${left ? `${left} rated fights left today.` : '<b>Daily rated fights used up:</b> further fights pay no Biomass or Elo until tomorrow (UTC).'}</p>
     ${offers.list.map((o, i) => {
       const e = ENV_BY_ID[o.env], s = o.snapshot, rr = powerRating(s);
       const tag = o.kind === 'player' ? `<span class="tag ex">Player</span>` : o.kind === 'rare' ? `<span class="tag rare">★ Rare</span>` : `<span class="tag">Wild</span>`;

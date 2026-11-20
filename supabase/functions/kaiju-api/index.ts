@@ -9,7 +9,7 @@ import { FRAME_BY_ID, STATS, MAX_STAT_LEVEL, RARE_FRAME_IDS } from '../_shared/k
 import { ABILITY_BY_ID, MAX_EQUIPPED, abilityAvailableTo } from '../_shared/kaiju/data/abilities.js';
 import { ENVIRONMENTS } from '../_shared/kaiju/data/environments.js';
 import { statUpgradeCost, powerRating, battleReward, generateRival, pickRare, RARE_CHANCE, RARE_POWER_PCT, RARE_REWARD_MULT } from '../_shared/kaiju/data/economy.js';
-import { INJURY_BY_ID, HEAL_HOURS, healCost } from '../_shared/kaiju/data/injuries.js';
+import { INJURY_BY_ID, healMs, healCost } from '../_shared/kaiju/data/injuries.js';
 import { rollAftermath } from '../_shared/kaiju/engine/aftermath.js';
 
 const MAX_KAIJU = 6;
@@ -332,10 +332,11 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
     const deltaD = rated && opp ? -eloDelta(k.elo, oppElo, score, K_PVP) : 0;
     const defReward = rated && opp && result === 'loss' ? DEFENSE_WIN_BIO : 0;
 
-    // Aftermath: new injuries for both real Kaiju; only the attacker can die (defenders aren't there to choose).
-    const aftermath = rollAftermath(record, { injurable: [true, !!opp], canDie: [true, false] });
+    // Aftermath: only the attacker can be injured or die. Defenders weren't there to choose the fight,
+    // so they never come back to an injured (or dead) Kaiju.
+    const aftermath = rollAftermath(record, { injurable: [true, false], canDie: [true, false] });
     const nowMs = Date.now(), nowIso = new Date(nowMs).toISOString();
-    const entry = (id: string | null) => id ? [{ id, at: nowIso, heals_at: new Date(nowMs + HEAL_HOURS[INJURY_BY_ID[id].severity] * 3600e3).toISOString() }] : [];
+    const entry = (id: string | null) => id ? [{ id, at: nowIso, heals_at: new Date(nowMs + healMs(id)).toISOString() }] : [];
     const died = aftermath[0].died;
     const salvage = died ? Math.floor((invested(k) * SALVAGE_PCT) / 100) : 0;
     const death = died ? { killer: oppSnap.name, killer_owner: oppOwnerName || 'Wild Kaiju', env: record.env, salvage } : null;
