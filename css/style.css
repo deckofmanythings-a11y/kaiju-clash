@@ -178,3 +178,13 @@ input[type=color] { width: 38px; height: 30px; border: 1px solid var(--line); ba
 /* ---------- Version tag ---------- */
 .brand { display: flex; flex-direction: column; line-height: 1; }
 .ver { font: 600 10px/1.2 Inter, sans-serif; color: var(--muted); letter-spacing: .3px; margin-top: 2px; white-space: nowrap; }
+
+/* Limit warnings (daily rated fights, roster cap) */
+.limit { background: rgba(239,68,68,.14); border: 2px solid rgba(239,68,68,.7); border-radius: 10px; padding: 12px 14px; margin: 10px 0; color: #fee2e2; font-size: 14px; line-height: 1.45; }
+.limit.soft { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.65); color: #fef3c7; }
+.limit-h { font: 24px/1.1 'Bebas Neue', sans-serif; letter-spacing: 1px; color: #f87171; margin-bottom: 4px; }
+.limit.soft .limit-h { color: #fbbf24; }
+.limit p { margin: 4px 0; }
+.limchip { background: rgba(245,158,11,.18); border: 1px solid rgba(245,158,11,.7); color: #fde68a; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.limchip.out { background: rgba(239,68,68,.22); border-color: rgba(239,68,68,.8); color: #fecaca; animation: limpulse 2s ease-in-out infinite; }
+@keyframes limpulse { 50% { box-shadow: 0 0 0 4px rgba(239,68,68,.25); } }

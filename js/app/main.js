@@ -9,7 +9,7 @@ import * as codes from './codes.js';
 import * as api from './api.js';
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 
 document.getElementById('ver').textContent = `Ver. ${APP_VERSION} · engine v${ENGINE_VERSION}`;
 
@@ -31,8 +31,38 @@ function toast(msg) {
   clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), 3000);
 }
 const active = () => me?.kaiju?.find(k => k.id === me.player.active) || me?.kaiju?.[0] || null;
+// ---------- limits ----------
+const MAX_KAIJU = 6;
+const LOW_RATED = 5;   // start warning when this few rated fights are left
+const ratedLeft = () => (me?.player ? Math.max(0, me.player.ratedPerDay - me.player.fightsToday) : 0);
+function resetIn() {
+  const n = new Date(), m = Math.max(1, Math.ceil((Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() + 1) - n) / 60000));
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+}
+// Big, impossible-to-miss explanation of the daily rated-fight limit (or '' when there's plenty left).
+function limitBanner() {
+  if (!me?.player) return '';
+  const left = ratedLeft(), per = me.player.ratedPerDay;
+  if (!left) return `<div class="limit">
+      <div class="limit-h">⛔ Daily Biomass limit reached</div>
+      <p>You've used all <b>${per} rated fights</b> for today. You can keep fighting, but fights are now <b>unrated</b>: they pay <b>no Biomass and no Elo</b>, and your Kaiju can still be injured.</p>
+      <p>Rated fights reset in <b>${resetIn()}</b> (midnight UTC). You can still spend the Biomass you have in the Lab.</p>
+    </div>`;
+  if (left <= LOW_RATED) return `<div class="limit soft">
+      <div class="limit-h">⚠ Only ${left} rated fight${left === 1 ? '' : 's'} left today</div>
+      <p>Each day you get ${per} rated fights. After that, fights pay no Biomass or Elo until the reset in <b>${resetIn()}</b> (midnight UTC).</p>
+    </div>`;
+  return '';
+}
 function updateTop() {
   $('#bio').textContent = me?.player ? me.player.bio.toLocaleString() : '–';
+  const chip = $('#limchip'), left = ratedLeft();
+  chip.hidden = !me?.player || left > LOW_RATED;
+  if (!chip.hidden) {
+    chip.classList.toggle('out', !left);
+    chip.textContent = left ? `⚠ ${left} rated left` : '⛔ No BIO until reset';
+    chip.title = left ? `${left} rated fights left today. After that, fights pay no Biomass or Elo until midnight UTC.` : `Daily limit of ${me.player.ratedPerDay} rated fights reached. Fights pay no Biomass or Elo until midnight UTC (in ${resetIn()}).`;
+  }
   const a = $('#acct');
   a.hidden = !me?.player; if (me?.player) a.textContent = `${me.player.name} · Sign out`;
   $('#nav').style.visibility = me?.player ? 'visible' : 'hidden';
@@ -193,12 +223,14 @@ function hangar() {
   const k = active();
   panel.innerHTML = `
     <h2>Hangar</h2><p class="sub">Your roster. Biomass is shared across all of them. The <b>active</b> Kaiju fights in the Arena and defends you on the ladder while you're away.</p>
+    ${limitBanner()}
     ${me.kaiju.map(x => `
       <div class="card click ${x.id === k.id ? 'sel' : ''}" data-pick="${x.id}">
         <div class="row"><b class="grow">${esc(x.name)}${x.id === k.id ? ' <span class="tag ex">Active</span>' : ''}</b><span class="elo">${x.elo}</span></div>
         <div class="rec">${condBadge(injIds(x))} ${FRAME_BY_ID[x.frame].name} · Power ${powerRating(x)} · <span class="w">${x.wins}W</span> <span class="l">${x.losses}L</span> ${x.draws}D · Defense ${x.def_wins}–${x.def_losses}</div>
       </div>`).join('')}
-    <div class="row" style="margin-top:12px"><button class="btn ghost grow" data-go="creator" ${me.kaiju.length >= 6 ? 'disabled' : ''}>+ New Kaiju</button><button class="btn grow" data-go="arena">To the Arena</button></div>
+    <div class="row" style="margin-top:12px"><button class="btn ghost grow" data-go="creator" ${me.kaiju.length >= MAX_KAIJU ? 'disabled' : ''}>+ New Kaiju</button><button class="btn grow" data-go="arena">To the Arena</button></div>
+    ${me.kaiju.length >= MAX_KAIJU ? `<div class="limit soft"><div class="limit-h">Roster full (${MAX_KAIJU}/${MAX_KAIJU})</div><p>You can have at most ${MAX_KAIJU} Kaiju. Release one (button below) to make room for a new one. Biomass is kept.</p></div>` : ''}
     <h3>Friendly code for ${esc(k.name)}</h3>
     <p class="sub">A friend can paste this in the Arena for an unrated sparring match.</p>
     <textarea readonly id="mycode">${codes.kaijuCode(snap(k, { owner: me.player.name }))}</textarea>
@@ -237,6 +269,7 @@ function creator() {
   const maxBase = { hp: 1300, pow: 24, enr: 24, arm: 24, spd: 18, fcs: 18 };
   panel.innerHTML = `
     <h2>Create a Kaiju</h2><p class="sub">Pick a frame. Each one has its own exclusive abilities and a different body.</p>
+    ${me?.kaiju?.length >= MAX_KAIJU ? `<div class="limit"><div class="limit-h">Roster full (${MAX_KAIJU}/${MAX_KAIJU})</div><p>You already have the maximum of ${MAX_KAIJU} Kaiju. Release one in the Hangar before creating another.</p></div>` : ''}
     <div class="frames">${FRAMES.map(x => `<div class="card click ${x.id === f.id ? 'sel' : ''}" data-frame="${x.id}"><b>${x.name}</b><small>${x.tags.slice(0, 2).join(' · ')}</small></div>`).join('')}</div>
     <h3>${f.name}</h3>
     <p class="sub" style="margin:0">${f.blurb}</p>
@@ -349,7 +382,8 @@ async function arena() {
     <h2>Arena</h2><p class="sub">${esc(k.name)} · Elo <span class="elo">${k.elo}</span> · Power ${my}<br>
     Condition: ${condBadge(injIds(k))}${injIds(k).length ? ' <button class="linkbtn" data-go="lab">heal</button>' : ''}</p>
     ${dc ? `<div class="warn">⚠ <b>Critical.</b> If ${esc(k.name)} is knocked out, there's a <b>${dc}%</b> chance it dies permanently.</div>` : ''}
-    <p class="sub">Fights run on the server and are automatic. Defenders are never injured or killed. ${left ? `${left} rated fights left today.` : '<b>Daily rated fights used up:</b> further fights pay no Biomass or Elo until tomorrow (UTC).'}</p>
+    <p class="sub">Fights run on the server and are automatic. Defenders are never injured or killed. ${left > LOW_RATED ? `${left} of ${me.player.ratedPerDay} rated fights left today.` : ''}</p>
+    ${limitBanner()}
     ${offers.list.map((o, i) => {
       const e = ENV_BY_ID[o.env], s = o.snapshot, rr = powerRating(s);
       const tag = o.kind === 'player' ? `<span class="tag ex">Player</span>` : o.kind === 'rare' ? `<span class="tag rare">★ Rare</span>` : `<span class="tag">Wild</span>`;
@@ -362,11 +396,11 @@ async function arena() {
         <div class="rec">${s.abilities.map(a => ABILITY_BY_ID[a]?.name).filter(Boolean).join(', ') || 'Basic attack only'}</div>
         ${pas ? `<div class="rec" style="margin-top:4px"><b style="color:var(--gold)">${pas.name}:</b> ${pas.desc}</div>` : ''}
         <div class="rec" style="margin:4px 0 8px">📍 ${e.name}: ${e.blurb}</div>
-        <div class="row"><span class="rec grow">${left ? `Win ≈ ${battleReward('win', my, rr) * mult}${mult > 1 ? ' (×' + mult + ')' : ''} · Loss ${battleReward('loss', my, rr)} BIO` : 'Unrated'}</span><button class="btn small" data-fight="${i}">Fight</button></div>
+        <div class="row"><span class="rec grow">${left ? `Win ≈ ${battleReward('win', my, rr) * mult}${mult > 1 ? ' (×' + mult + ')' : ''} · Loss ${battleReward('loss', my, rr)} BIO${rr < my * 0.85 ? ' <span title="Rewards scale with opponent strength: weaker opponents pay less (down to 60%).">(weaker foe: reduced pay)</span>' : ''}` : '<b class="l">Unrated: 0 BIO</b>'}</span><button class="btn small" data-fight="${i}">Fight</button></div>
       </div>`;
     }).join('')}
     <p class="rec" style="margin-top:6px">One opponent is always a Wild Kaiju (others are real players near your Elo when available). Wild fights move your Elo at half rate.</p>
-    <button class="btn ghost small" id="reroll" ${me.player.bio < 15 ? 'disabled' : ''}>New opponents (15 BIO)</button>
+    <button class="btn ghost small" id="reroll" ${me.player.bio < 15 ? 'disabled title="Not enough Biomass (needs 15)"' : ''}>New opponents (15 BIO)</button>
     <h3>Friendly sparring</h3>
     <p class="sub">Paste a friend's Kaiju code (KJ1…) for an unrated match, or a replay code (KR1…) to watch.</p>
     <textarea id="code" placeholder="KJ1.… or KR1.…"></textarea>
@@ -378,6 +412,10 @@ async function arena() {
     const f = e.target.closest('[data-fight]');
     if (f) {
       if (dc && !confirm(`${k.name} is Critical. If it is knocked out there is a ${dc}% chance it dies permanently.\n\nFight anyway?`)) return;
+      if (!left && !arena._unratedOk) {
+        if (!confirm(`Daily limit reached: this fight is UNRATED.\n\nIt pays no Biomass and no Elo, but ${k.name} can still be injured. Rated fights reset in ${resetIn()} (midnight UTC).\n\nFight anyway?`)) return;
+        arena._unratedOk = true;
+      }
       return rankedFight(+f.dataset.fight);
     }
     if (e.target.id === 'reroll') {
@@ -575,6 +613,9 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
         <div class="rec">${sub} · ${record.reason === 'ko' ? 'Knockout' : record.reason === 'decision' ? 'Time: decision on remaining HP' : 'Double knockout'} · ${record.turns} actions</div>
         ${verified !== undefined ? `<div class="${verified ? 'verified' : 'l'}" style="font-size:11px;margin-top:4px">${verified ? '✓ Re-simulated locally: identical to the server result' : '⚠ Local re-simulation did not match'}</div>` : ''}
         ${rare && result === 'win' ? `<div class="rarebanner" style="margin-top:10px">★ Trophy: ${FRAME_BY_ID[record.fighters[1].frame].name} defeated (×${RARE_REWARD_MULT} Biomass)</div>` : ''}
+        ${!friendly && !replay && rated === false ? `<div class="limit" style="text-align:left;margin-top:10px"><div class="limit-h">No Biomass: daily limit reached</div><p>You've used all ${me?.player?.ratedPerDay ?? 40} rated fights for today, so this fight paid <b>0 Biomass and 0 Elo</b>. Rated fights reset in <b>${resetIn()}</b> (midnight UTC).</p></div>` : ''}
+        ${!friendly && !replay && rated && me?.player && ratedLeft() === 0 ? `<div class="limit soft" style="text-align:left;margin-top:10px"><div class="limit-h">That was your last rated fight today</div><p>Fights after this pay no Biomass or Elo until the reset in <b>${resetIn()}</b> (midnight UTC).</p></div>` : ''}
+        ${!friendly && !replay && rated && me?.player && ratedLeft() > 0 && ratedLeft() <= LOW_RATED ? `<div class="rec" style="margin-top:8px;color:#fcd34d">⚠ ${ratedLeft()} rated fight${ratedLeft() === 1 ? '' : 's'} left today.</div>` : ''}
         ${aftermathHtml(aftermath, record.fighters, { mySide })}
         ${salvage ? `<div class="rec">Salvaged <b style="color:var(--gold)">${salvage} BIO</b> from the remains.</div>` : ''}
         ${reward || elo ? `<div class="reward">${reward ? `+${reward} Biomass` : ''}${elo ? ` <span class="${elo > 0 ? 'delta-up' : 'delta-dn'}" style="font-size:22px">${elo > 0 ? '+' : ''}${elo} Elo</span>` : ''}</div>` : '<div style="height:18px"></div>'}
