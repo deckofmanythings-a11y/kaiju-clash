@@ -9,7 +9,7 @@ import * as codes from './codes.js';
 import * as api from './api.js';
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 
 document.getElementById('ver').textContent = `Ver. ${APP_VERSION} · engine v${ENGINE_VERSION}`;
 

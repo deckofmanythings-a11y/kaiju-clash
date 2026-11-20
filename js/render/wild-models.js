@@ -17,6 +17,8 @@
 import * as THREE from 'three';
 import { registerPlanBuilder, HP_SIZE } from './kaiju-model.js';
 import { ABILITY_BY_ID } from '../data/abilities.js';
+import { registerWildRuntimes } from './glb-models.js';
+import { makeWildRuntimes } from './glb-wild.js';
 
 const V3 = THREE.Vector3;
 const v = (x = 0, y = 0, z = 0) => new V3(x, y, z);
@@ -1166,3 +1168,7 @@ registerPlanBuilder('army', buildArmy);
 registerPlanBuilder('magicalgirl', buildMagicalGirl);
 
 export const WILD_PLANS = ['hero', 'heroteam', 'army', 'magicalgirl'];
+
+// The GLB versions of these frames (glb-models.js / glb-wild.js) reuse the effect helpers above, so the GLB
+// wild frames switch on only once this module has loaded.
+registerWildRuntimes(makeWildRuntimes({ glowTex, haloTex, starTex, smokeTex, sprite, addMat, makeCloth, poseCloth, tinyFx, dart, jetModel }));

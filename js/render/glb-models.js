@@ -47,12 +47,12 @@ export const GLB_FRAMES = {
   hydra: { koMode: 'side', quad: true },
   arachnid: { koMode: 'side' },
   stormray: { koMode: 'tilt', hover: 3.7, bank: 0.3 },
-  // Rare Wild frames stay on the procedural wild-models.js for now: the GLB runtimes don't yet port their
-  // special behaviour (cape sim, beam eyes, tag-team swap, air strikes, reinforcements). Re-enable once ported.
-  // superhero: { tiny: true, hover: 0.9, wild: 'hero' },
-  // magicalgirl: { tiny: true, hover: 0.8, wild: 'hero' },
-  // heroteam: { tiny: true, koMode: 'team', wild: 'team' },
-  // army: { koMode: 'army', wild: 'army' },
+  // Rare Wild frames: `wild` names their runtime in glb-wild.js (cape sim, beam eyes, tag-team swap, air strikes,
+  // reinforcements, transformation ...), registered by wild-models.js.
+  superhero: { tiny: true, hover: 0.9, wild: 'hero' },
+  magicalgirl: { tiny: true, hover: 0.8, wild: 'girl' },
+  heroteam: { tiny: true, koMode: 'team', wild: 'team' },
+  army: { koMode: 'army', wild: 'army' },
 };
 
 let enabled = true;
@@ -65,7 +65,11 @@ const cache = new Map(); // frameId -> { state: 'loading' | 'ready' | 'failed', 
 const MAX_CACHED = 8;
 let loader = null;
 
-export function glbReady(frameId) { return enabled && cache.get(frameId)?.state === 'ready'; }
+export function glbReady(frameId) {
+  if (!enabled || cache.get(frameId)?.state !== 'ready') return false;
+  const w = GLB_FRAMES[frameId]?.wild;
+  return !w || !!WILD?.[w];
+}
 // frames that still need a network round-trip before they can be built from their GLB
 export function glbMissing(ids) {
   if (!enabled) return [];
@@ -151,7 +155,7 @@ function prepare(id, e, gltf) {
       return b;
     };
     const name = me.material?.name || '';
-    if (name === 'eye') {
+    if (name === 'eye' || name === 'iris') {
       for (let i = 0; i < pos.count; i++) eyePts.push({ p: new V3().fromBufferAttribute(pos, i), b: dom(i) });
       continue;
     }
@@ -175,8 +179,10 @@ function prepare(id, e, gltf) {
     e.colliders.push({ bone: nodeName(bones[bi]), geo: g });
   }
   // ---- eyes (for the eye injury): one cluster per side
+  let top = 0; for (const me of bodyMeshes) top = Math.max(top, me.geometry.boundingBox.max.y);
+  const mid = Math.max(0.002, top * 0.003); // centre band scales with the model (tiny frames are ~1 unit tall)
   for (const side of [1, -1, 0]) {
-    const pts = eyePts.filter(q => side ? q.p.x * side > 0.03 : Math.abs(q.p.x) <= 0.03);
+    const pts = eyePts.filter(q => side ? q.p.x * side > mid : Math.abs(q.p.x) <= mid);
     if (pts.length < 3) continue;
     const ctr = new V3(); for (const q of pts) ctr.add(q.p); ctr.multiplyScalar(1 / pts.length);
     let r2 = 0; for (const q of pts) r2 += q.p.distanceToSquared(ctr);
@@ -396,7 +402,7 @@ export function buildGlbPlan(c, frameId) {
   };
   const under = (bone) => colliders.filter(o => { for (let p = o; p; p = p.parent) if (p === bone) return true; return false; });
 
-  const I = { c, cfg, frameId, bones, empties, proxy, chain, seq, point, pointAt, mountOn, wpos, wdir, cast, under, colliders, anchor, rootBone, S, T };
+  const I = { c, cfg, frameId, bones, empties, proxy, chain, seq, point, pointAt, mountOn, wpos, wdir, cast, under, colliders, anchor, rootBone, S, T, skinned, inst, stockTick };
   buildRig(I);
   if (!cfg.wild) { try { buildMounts(I); } catch (err) { console.warn('[glb-models] mounts failed', frameId, err); } }
   else {
@@ -426,7 +432,7 @@ export function buildGlbPlan(c, frameId) {
     },
   };
   c.glb = glb;
-  if (cfg.wild && !statue) { try { WILD[cfg.wild]?.(I, glb); } catch (err) { console.warn('[glb-models] wild runtime failed', frameId, err); } }
+  if (cfg.wild && !statue) { try { WILD?.[cfg.wild]?.(I, glb); } catch (err) { console.warn('[glb-models] wild runtime failed', frameId, err); } }
   else if (!statue) glb.tick = stockTick(I);
   return true;
 }
@@ -619,139 +625,8 @@ function buildMounts(I) {
 }
 
 // ---------------------------------------------------------------- wild (human-scale / vehicle) runtimes
-function glowTex() {
-  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
-  const g = cv.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,255,255,0.45)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
-  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-function sprite(tex, col, size, opacity = 1) {
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: col, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-  s.scale.setScalar(size);
-  return s;
-}
-// ground spotlight + ring + beacon + motion trail so ~1-unit fighters stay findable next to ~10-unit kaiju
-function tinyFx(glb, accC, o = {}) {
-  const tex = glowTex(), late = glb.late;
-  const disc = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-PI / 2), new THREE.MeshBasicMaterial({ map: tex, color: accC, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-  const dr = o.disc ?? 3.4;
-  disc.scale.set(dr, 1, dr); disc.position.y = 0.05; disc.renderOrder = 3;
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 56).rotateX(-PI / 2), new THREE.MeshBasicMaterial({ color: accC, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
-  ring.position.y = 0.07; ring.renderOrder = 3;
-  late.push([disc, 'model'], [ring, 'model']);
-  const beacon = sprite(tex, accC, o.beacon ?? 3.4, 0.35);
-  beacon.position.y = o.centerY ?? 0.5;
-  late.push([beacon, null]);
-  const N = o.trail === false ? 0 : 16, hist = [], trail = [];
-  for (let i = 0; i < N; i++) { const s = sprite(tex, accC.clone().lerp(new THREE.Color('#ffffff'), 0.3), 0.55, 0); trail.push(s); late.push([s, 'model']); }
-  const p = new V3();
-  return (rig, dt, t, boost = 0) => {
-    const a = rig.anim, up = 1 - a.ko * 0.8, m = rig.motion, near = rig.bankSign ? 1 : 0.45;
-    const rr = (o.ring ?? 1.3) * (1 + 0.08 * Math.sin(t * 4) + boost * 0.4);
-    ring.scale.setScalar(rr); ring.position.x = m.position.x; ring.position.z = m.position.z;
-    ring.material.opacity = ((0.55 + 0.25 * Math.sin(t * 4)) * up + boost * 0.3) * near;
-    disc.position.x = m.position.x; disc.position.z = m.position.z;
-    disc.material.opacity = (0.36 + 0.1 * Math.sin(t * 2.3) + a.charge * 0.4 + boost * 0.4) * up * near;
-    beacon.material.opacity = Math.min(1, (0.3 + 0.1 * Math.sin(t * 3) + a.charge * 0.5 + boost * 0.4) * up) * (rig.bankSign ? 1 : 0.35);
-    beacon.scale.setScalar((o.beacon ?? 3.4) * (1 + a.charge * 0.4 + boost * 0.5));
-    if (!N) return;
-    p.set(m.position.x, m.position.y + (o.centerY ?? 0.5), m.position.z);
-    hist.unshift(p.clone()); if (hist.length > N + 1) hist.length = N + 1;
-    for (let i = 0; i < N; i++) {
-      const s = trail[i], q = hist[i], q2 = hist[i + 1];
-      if (!q || !q2) { s.material.opacity = 0; continue; }
-      s.position.copy(q);
-      const spd = q.distanceTo(q2) / Math.max(dt, 1e-3);
-      s.material.opacity = clamp01((spd - 1.5) / 8) * (1 - i / N) * 0.85 * up;
-      s.scale.setScalar(0.55 * (1 - i / N * 0.6));
-    }
-  };
-}
-const hash1 = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return (s - Math.floor(s)) * 2 - 1; };
-const lerp = (a, b, t) => a + (b - a) * t;
-function dart(out, t, seed, amp = 1, period = 1.15) {
-  const f = t / period + seed, n = Math.floor(f), k = smooth((f - n) * 3.5);
-  const ax = lerp(hash1(n - 1), hash1(n), k), ay = lerp(hash1(n + 39), hash1(n + 40), k), az = lerp(hash1(n + 89), hash1(n + 90), k);
-  return out.set(ax * 0.8 * amp + Math.sin(t * 5.1) * 0.05, (ay * 0.5 + 0.2) * amp + Math.sin(t * 3.3) * 0.06, az * 0.7 * amp);
-}
-const accentOf = (c) => { const k = new THREE.Color(); try { k.set(c.colors.accent); } catch { k.set('#ffd23f'); } return k; };
-
-const WILD = {
-  // superhero / magical girl: zippy hover, fly up to strike the kaiju's chest
-  hero(I, glb) {
-    const { c } = I, acc = accentOf(c);
-    const tfx = tinyFx(glb, acc, { centerY: 0.5, beacon: 3.2 });
-    const spineTick = stockTick(I);
-    const dv = new V3();
-    const api = { reset() {} };
-    c.rig.extra.wild = api;
-    glb.tick = (rig, dt, t) => {
-      const a = rig.anim, up = 1 - a.ko;
-      const calm = up * (1 - Math.min(1, Math.abs(a.lunge) * 3)) * (1 - a.victory * 0.6) * (1 - a.charge * 0.7);
-      dart(dv, t, 0.3, rig.bankSign ? 0.9 : 0.25);
-      const m = rig.motion;
-      m.position.x += (dv.x - (rig.bankSign || 0) * 0.5) * calm; m.position.y += dv.y * calm; m.position.z += dv.z * calm;
-      m.position.y += Math.max(0, a.lunge) * 3.4;
-      spineTick?.(rig, dt, t);
-      tfx(rig, dt, t, 0);
-    };
-  },
-  // five heroes: one skinned leader + four single-bone members that bob, dash in turn and fall one by one
-  team(I, glb) {
-    const { c, bones, proxy } = I, acc = accentOf(c);
-    const tfx = tinyFx(glb, acc, { centerY: 0.45, beacon: 5.5, disc: 6.0, ring: 2.7, trail: false });
-    const members = [1, 2, 3, 4, 5].map(i => bones.get('hero' + i)).filter(Boolean).map((b, i) => ({ p: proxy(b), ph: i * 1.9, z: I.wpos(b).z }));
-    const order = [0, 2, 1, 3, 4];
-    const api = {
-      active: 0, seq: 0,
-      reset() { this.active = 0; this.seq = 0; },
-      onStrike(hitNo, nHits, kind) { this.active = (kind === 'melee' || kind === 'multi' || kind === 'grab') ? order[(this.seq++) % Math.max(1, members.length)] : 0; },
-    };
-    c.rig.extra.wild = api;
-    const frontZ = Math.max(0, ...members.map(m => m.z));
-    glb.tick = (rig, dt, t) => {
-      const a = rig.anim, m0 = rig.motion, sc = rig.scale || 1;
-      // the group lunge becomes one member dashing in; the group KO tilt becomes members falling one by one
-      m0.position.z -= a.lunge * a.reach;
-      m0.rotation.x = 0;
-      members.forEach((m, i) => {
-        const act = i === api.active ? a.lunge : 0;
-        const fallK = clamp01(a.ko * 1.5 - i * 0.12);
-        m.p.position.set(0, Math.max(0, act) * 3.0 / sc + Math.abs(Math.sin(t * 3 + m.ph)) * 0.05 * a.victory + Math.abs(Math.sin(t * 1.7 + m.ph)) * 0.012 * (1 - a.ko),
-          act * (a.reach / sc + frontZ - m.z - 0.1));
-        m.p.rotation.set(-fallK * 1.45 + act * 0.25 - a.recoil * 0.1, 0, Math.sin(t * 0.5 + m.ph) * 0.03);
-      });
-      tfx(rig, dt, t, 0);
-    };
-  },
-  // vehicles: rotors spin, turrets track lazily, wrecks tilt and the helicopters come down on KO
-  army(I, glb) {
-    const { c, bones, proxy, wpos } = I;
-    const api = { noLunge: true, noLift: true, reset() {} };
-    c.rig.extra.wild = api;
-    const rotors = ['rotor', 'rotor2'].map(n => bones.get(n)).filter(Boolean).map(b => proxy(b));
-    const turrets = [...bones.keys()].filter(n => /_tur$/.test(n)).map((n, i) => ({ p: proxy(bones.get(n)), ph: i * 1.3 }));
-    const radar = bones.get('radar') ? proxy(bones.get('radar')) : null;
-    const hulls = [...bones.keys()].filter(n => /^(tank|art|truck|wall)\d*$/.test(n)).map((n, i) => ({ p: proxy(bones.get(n)), ph: i * 2.3 }));
-    const fliers = ['heli', 'heli2', 'jet', 'drone'].map(n => bones.get(n)).filter(Boolean).map((b, i) => ({ p: proxy(b), ph: i * 1.7, h: wpos(b).y, jet: nodeName(b) === 'jet' }));
-    glb.tick = (rig, dt, t) => {
-      const a = rig.anim, ko = a.ko, m0 = rig.motion;
-      m0.rotation.x = 0; m0.position.z = -a.recoil * 0.4; // an army holds its line: no group lunge / topple
-      for (const r of rotors) r.rotation.y = t * 22 * (1 - ko * 0.9);
-      if (radar) radar.rotation.y = t * 1.3 * (1 - ko);
-      for (const u of turrets) u.p.rotation.set(-a.lunge * 0.05 + ko * 0.12, Math.sin(t * 0.35 + u.ph) * 0.3 * (1 - ko) + ko * (u.ph - 2) * 0.3, 0);
-      for (const u of hulls) {
-        const jolt = a.recoil * 0.5 + Math.max(0, a.lunge) * 0.15;
-        u.p.rotation.set(-jolt * 0.1 * Math.sin(t * 20 + u.ph) + ko * 0.16 * Math.sin(u.ph * 3), 0, jolt * 0.08 * Math.sin(t * 17 + u.ph) + ko * 0.2 * Math.cos(u.ph * 2));
-        u.p.position.set(0, jolt * 0.2 * Math.abs(Math.sin(t * 14 + u.ph)) - ko * 0.12, 0);
-      }
-      for (const f of fliers) {
-        const drop = smooth(ko * 1.3 - f.ph * 0.08);
-        f.p.position.set(Math.sin(t * 0.6 + f.ph) * 0.5 * (1 - drop), Math.sin(t * 1.4 + f.ph) * 0.25 * (1 - drop) - drop * Math.max(0, f.h - 0.5), Math.cos(t * 0.45 + f.ph) * 0.4 * (1 - drop));
-        f.p.rotation.set(0.08 * Math.sin(t * 0.9 + f.ph) + drop * 0.5, 0, 0.1 * Math.sin(t * 0.6 + f.ph) + drop * (f.ph % 2 ? 0.9 : -0.9));
-      }
-    };
-  },
-};
+// The rare Wild frames' special behaviour lives in glb-wild.js and reuses wild-models.js's effect helpers.
+// wild-models.js registers the runtimes here when it loads; until then those four frames report "not ready"
+// and build from their procedural plans.
+let WILD = null;
+export function registerWildRuntimes(w) { WILD = w || null; }
