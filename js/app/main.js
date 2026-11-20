@@ -598,11 +598,14 @@ async function boot() {
   panel.innerHTML = '<p class="sub">Loading your Kaiju…</p>';
   try { applyBoot(await api.call('me')); }
   catch (e) { toast(e.message); if (e.status === 401) { await api.signOut(); me = null; } go('auth'); return; }
+  if (authMode === 'recover') { me = null; go('auth'); return; }   // reset link: set a new password before anything else
   go(me.needsName ? 'name' : active() ? 'hangar' : 'creator');
   defenseReport();
 }
 
 api.sb.auth.onAuthStateChange((evt) => { if (evt === 'PASSWORD_RECOVERY') { authMode = 'recover'; me = null; go('auth'); } });
 initStage();
+if (api.isRecoveryLink) authMode = 'recover';
+if (api.authLinkError) setTimeout(() => toast(`Reset link problem: ${api.authLinkError}. Request a new one.`), 300);
 const sharedBattle = new URLSearchParams(location.search).get('battle');
 boot().then(() => { if (sharedBattle) watchBattleId(sharedBattle); });

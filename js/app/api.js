@@ -4,6 +4,15 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 export const SUPABASE_URL = 'https://uaoxvhihwiygrajicend.supabase.co';
 const KEY = 'sb_publishable_91Zn_uJ9anW46vAClx6-bQ__wLL4fXl';
+
+// Read the auth redirect BEFORE supabase-js consumes and clears the URL hash. A password-reset
+// link lands here as #access_token=…&type=recovery, or as #error=…&error_description=… when the
+// link is expired or already used.
+const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+export const isRecoveryLink = hashParams.get('type') === 'recovery';
+export const authLinkError = hashParams.get('error_description')?.replace(/\+/g, ' ') || null;
+if (authLinkError) history.replaceState(null, '', location.pathname + location.search);
+
 export const sb = createClient(SUPABASE_URL, KEY, { auth: { storageKey: 'kb-auth' } });
 
 export async function session() {
