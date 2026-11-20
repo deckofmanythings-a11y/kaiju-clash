@@ -4,8 +4,9 @@ import { createRng, fnv1a } from './rng.js';
 import { FRAME_BY_ID, STATS, effectiveStats } from '../data/frames.js';
 import { ABILITY_BY_ID, STATUSES, abilityAvailableTo, MAX_EQUIPPED } from '../data/abilities.js';
 import { ENV_BY_ID } from '../data/environments.js';
+import { INJURY_BY_ID, MAX_INJURIES, applyInjuries } from '../data/injuries.js';
 
-export const ENGINE_VERSION = 1;
+export const ENGINE_VERSION = 2; // v2: persistent injuries lower stats
 const MAX_ACTIONS = 80;          // 40 rounds
 const GAUGE = 1000;              // initiative threshold
 const START_ENERGY = 20;
@@ -33,15 +34,16 @@ export function sanitizeSnapshot(s) {
     seen.add(id); abilities.push(id);
     if (abilities.length >= MAX_EQUIPPED) break;
   }
+  const injuries = [...new Set(Array.isArray(s.injuries) ? s.injuries : [])].filter(id => INJURY_BY_ID[id]).slice(0, MAX_INJURIES);
   return {
     id: String(s.id || ''), name: String(s.name || 'Unnamed').slice(0, 24), frame: frame.id,
-    levels, abilities, colors: { ...frame.colors, ...(s.colors || {}) }, owner: s.owner ? String(s.owner).slice(0, 32) : undefined,
+    levels, abilities, injuries, colors: { ...frame.colors, ...(s.colors || {}) }, owner: s.owner ? String(s.owner).slice(0, 32) : undefined,
   };
 }
 
 function envStats(snapshot, env) {
   const frame = FRAME_BY_ID[snapshot.frame];
-  const st = effectiveStats(snapshot);
+  const st = applyInjuries(effectiveStats(snapshot), snapshot.injuries);
   const mods = env.tagMods || {};
   let matched = false;
   for (const tag of Object.keys(mods)) {
@@ -292,7 +294,7 @@ export function simulateBattle({ seed, env: envId, a, b }) {
   return {
     v: ENGINE_VERSION, seed, env: env.id, fighters: snaps,
     meta: F.map(f => ({ maxHp: f.maxHp, stats: f.stats })),
-    events, winner, reason, turns: actions, hash: fnv1a(JSON.stringify(events)),
+    events, winner, reason, turns: actions, finalHp: F.map(f => f.hp), hash: fnv1a(JSON.stringify(events)),
   };
 }
 

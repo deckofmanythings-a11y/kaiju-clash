@@ -8,6 +8,9 @@ import { FRAMES, STATS } from '../js/data/frames.js';
 import { abilitiesForFrame } from '../js/data/abilities.js';
 import { ENVIRONMENTS } from '../js/data/environments.js';
 import { createRng } from '../js/engine/rng.js';
+import { rollAftermath } from '../js/engine/aftermath.js';
+import { INJURIES, applyInjuries, severityOf } from '../js/data/injuries.js';
+import { effectiveStats } from '../js/data/frames.js';
 
 let fail = 0;
 const N = 500;
@@ -50,5 +53,30 @@ for (const [lvl, nAb] of [[0, 1], [5, 4]]) {
   turns.sort((x, y) => x - y);
   console.log(`\nbalance @ level ${lvl}, ${nAb} abilities  (median actions ${turns[turns.length >> 1]}, draws ${draws})`);
   for (const f of FRAMES) console.log(`  ${f.name.padEnd(12)} ${((100 * (wins[f.id] || 0)) / games[f.id]).toFixed(1)}%`);
+}
+
+// ---- Injuries ----
+{
+  const k = { frame: 'saurian', levels: { pow: 5 }, injuries: ['fractured_claw', 'shattered_limb'] };
+  const st = applyInjuries(effectiveStats(k), k.injuries);
+  if (st.pow !== Math.floor(effectiveStats(k).pow * 65 / 100)) { fail++; console.log('INJURY STACK WRONG', st.pow); }
+  let mism = 0;
+  const tally = { injured: 0, major: 0, deaths: 0, koCritical: 0 };
+  for (let i = 0; i < 2000; i++) {
+    const inj = INJURIES.filter((_, j) => (i >> j) & 1).slice(0, 5).map(x => x.id);
+    const a = { ...generateRival(9000 + i, 200), injuries: inj }, b = generateRival(19000 + i, 200);
+    const r = simulateBattle({ seed: i * 31 + 7, env: 'city', a, b });
+    const opts = { injurable: [true, true], canDie: [true, false] };
+    const x = JSON.stringify(rollAftermath(r, opts)), y = JSON.stringify(rollAftermath(JSON.parse(JSON.stringify(r)), opts));
+    if (x !== y) mism++;
+    const am = rollAftermath(r, opts);
+    if (am[0].injury) { tally.injured++; if (INJURIES.find(z => z.id === am[0].injury).severity === 2) tally.major++; }
+    if (am[1].died) mism++; // defender may never die
+    if (am[0].outcome === 'knockedOut' && severityOf(r.fighters[0].injuries) >= 5) { tally.koCritical++; if (am[0].died) tally.deaths++; }
+    if (am[0].died && severityOf(r.fighters[0].injuries) < 5) mism++; // only critical can die
+  }
+  if (mism) { fail++; console.log('AFTERMATH MISMATCH/RULE BREAK', mism); }
+  console.log(`
+aftermath: 2000 fights, attacker injured ${tally.injured} (${tally.major} major), critical KO'd ${tally.koCritical}, died ${tally.deaths}`);
 }
 process.exit(fail ? 1 : 0);

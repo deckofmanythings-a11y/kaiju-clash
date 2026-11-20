@@ -4,6 +4,7 @@ import { ENV_BY_ID, ENVIRONMENTS } from '../data/environments.js';
 import { statUpgradeCost, powerRating, battleReward } from '../data/economy.js';
 import { simulateBattle, verifyReplay, ENGINE_VERSION } from '../engine/battle.js';
 import { randomSeed, createRng } from '../engine/rng.js';
+import { INJURY_BY_ID, conditionOf, deathChance, healCost, applyInjuries } from '../data/injuries.js';
 import * as codes from './codes.js';
 import * as api from './api.js';
 
@@ -17,6 +18,7 @@ let screen = null, offers = null, ladder = null, history = null;
 let draft = { frame: 'saurian', name: '', colors: { ...FRAME_BY_ID.saurian.colors } };
 let stage = null, playBattle = null, playing = null, currentEnv = null;
 let authMode = 'signin';
+let showcaseOverride = null;   // e.g. a fallen Kaiju's statue in the Hangar
 
 // ---------- helpers ----------
 function toast(msg) {
@@ -31,7 +33,7 @@ function updateTop() {
   $('#nav').style.visibility = me?.player ? 'visible' : 'hidden';
 }
 function applyBoot(b) {
-  if (b.player) me = { player: b.player, kaiju: b.kaiju, defenses: b.defenses || [] };
+  if (b.player) me = { player: b.player, kaiju: b.kaiju, defenses: b.defenses || [], fallen: b.fallen || [] };
   if (b.needsName) me = { needsName: true };
   updateTop();
 }
@@ -48,6 +50,27 @@ async function act(action, payload, { rerender = true } = {}) {
     if (e.status === 401) { me = null; go('auth'); }
     return null;
   } finally { panel.classList.remove('busy'); }
+}
+
+// ---------- injuries ----------
+const liveInjuries = (k) => (k?.injuries || []).filter(i => INJURY_BY_ID[i.id] && Date.parse(i.heals_at) > Date.now());
+const injIds = (k) => liveInjuries(k).map(i => i.id);
+const snap = (k, extra = {}) => ({ ...k, injuries: injIds(k), ...extra });   // what the engine/renderer see
+const injText = (id) => Object.entries(INJURY_BY_ID[id].mods).map(([k, v]) => `${v}% ${STAT_NAMES[k]}`).join(', ');
+const timeLeft = (iso) => { const m = Math.max(0, Math.ceil((Date.parse(iso) - Date.now()) / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
+function condBadge(ids) {
+  const c = conditionOf(ids);
+  return `<span class="cond" style="--c:${c.color}">${c.name}${c.severity ? ' · ' + c.severity : ''}</span>`;
+}
+function aftermathHtml(am, fighters, { mySide = null } = {}) {
+  if (!am) return '';
+  return am.map((x, i) => {
+    const nm = esc(fighters[i].name), bits = [];
+    if (x.died) bits.push(`<div class="death">☠ ${nm} has died.</div>`);
+    if (x.injury) bits.push(`<div class="inj">🩸 ${nm} suffered <b>${INJURY_BY_ID[x.injury].name}</b> <span class="rec">(${injText(x.injury)})</span></div>`);
+    else if (x.deathChance && !x.died && mySide === i) bits.push(`<div class="rec">${nm} survived a ${x.deathChance}% death roll.</div>`);
+    return bits.join('');
+  }).join('');
 }
 
 function describe(ab) {
@@ -69,7 +92,8 @@ function refreshShowcase() {
   if (!stage) return;
   try {
     if (screen === 'creator') stage.showcase({ name: draft.name, frame: draft.frame, levels: {}, abilities: [FRAME_BY_ID[draft.frame].exclusive[0]], colors: draft.colors });
-    else { const k = active(); stage.showcase(k || { frame: 'saurian', levels: {}, abilities: [], colors: FRAME_BY_ID.saurian.colors }); }
+    else if (showcaseOverride) stage.showcase(showcaseOverride);
+    else { const k = active(); stage.showcase(k ? snap(k) : { frame: 'saurian', levels: {}, abilities: [], colors: FRAME_BY_ID.saurian.colors }); }
   } catch (e) { console.warn(e); }
 }
 async function initStage() {
@@ -89,7 +113,7 @@ function go(s) {
   if (!me) s = 'auth';
   else if (me.needsName) s = 'name';
   else if (!active() && !['creator', 'ladder', 'replays'].includes(s)) s = 'creator';
-  screen = s;
+  screen = s; showcaseOverride = null;
   hud.hidden = true; panel.hidden = false; modal.hidden = true;
   for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.go === s);
   updateTop();
@@ -165,14 +189,19 @@ function hangar() {
     ${me.kaiju.map(x => `
       <div class="card click ${x.id === k.id ? 'sel' : ''}" data-pick="${x.id}">
         <div class="row"><b class="grow">${esc(x.name)}${x.id === k.id ? ' <span class="tag ex">Active</span>' : ''}</b><span class="elo">${x.elo}</span></div>
-        <div class="rec">${FRAME_BY_ID[x.frame].name} · Power ${powerRating(x)} · <span class="w">${x.wins}W</span> <span class="l">${x.losses}L</span> ${x.draws}D · Defense ${x.def_wins}–${x.def_losses}</div>
+        <div class="rec">${condBadge(injIds(x))} ${FRAME_BY_ID[x.frame].name} · Power ${powerRating(x)} · <span class="w">${x.wins}W</span> <span class="l">${x.losses}L</span> ${x.draws}D · Defense ${x.def_wins}–${x.def_losses}</div>
       </div>`).join('')}
     <div class="row" style="margin-top:12px"><button class="btn ghost grow" data-go="creator" ${me.kaiju.length >= 6 ? 'disabled' : ''}>+ New Kaiju</button><button class="btn grow" data-go="arena">To the Arena</button></div>
     <h3>Friendly code for ${esc(k.name)}</h3>
     <p class="sub">A friend can paste this in the Arena for an unrated sparring match.</p>
-    <textarea readonly id="mycode">${codes.kaijuCode({ ...k, owner: me.player.name })}</textarea>
+    <textarea readonly id="mycode">${codes.kaijuCode(snap(k, { owner: me.player.name }))}</textarea>
     <div class="row" style="margin-top:6px"><button class="btn ghost small" id="copycode">Copy code</button><span class="grow"></span>
     ${me.kaiju.length > 1 ? `<button class="btn ghost small" id="release">Release ${esc(k.name)}</button>` : ''}</div>
+    ${me.fallen.length ? '<h3>Hall of the Fallen</h3>' + me.fallen.map((f, i) => `
+      <div class="card click fallen" data-fallen="${i}">
+        <div class="row"><b class="grow">☠ ${esc(f.name)}</b><span class="rec">${new Date(f.died_at).toLocaleDateString()}</span></div>
+        <div class="rec">${FRAME_BY_ID[f.frame].name} · ${f.wins}W ${f.losses}L · Elo ${f.elo} · slain by ${esc(f.death?.killer || 'unknown')} in ${ENV_BY_ID[f.death?.env]?.name || 'battle'}</div>
+      </div>`).join('') : ''}
     <p style="margin-top:24px"><button class="linkbtn" id="so">Sign out (${esc(me.player.name)})</button></p>`;
   panel.onclick = async (e) => {
     const p = e.target.closest('[data-pick]');
@@ -180,6 +209,15 @@ function hangar() {
     if (e.target.id === 'copycode') navigator.clipboard?.writeText($('#mycode').value).then(() => toast('Code copied'));
     if (e.target.id === 'release' && confirm(`Release ${k.name}? It leaves the ladder for good (Biomass stays).`)) { offers = null; await act('retire', { kaiju_id: k.id }); }
     if (e.target.id === 'so') signOut();
+    const wb = e.target.closest('[data-watch]'); if (wb) return watchBattleId(wb.dataset.watch);
+    const fl = e.target.closest('[data-fallen]');
+    if (fl) {
+      const f = me.fallen[+fl.dataset.fallen];
+      showcaseOverride = { ...f, injuries: (f.injuries || []).map(i => i.id), fallen: true };
+      refreshShowcase();
+      for (const c of document.querySelectorAll('[data-fallen]')) c.classList.toggle('sel', c === fl);
+      if (f.death?.battle && !fl.querySelector('[data-watch]')) fl.insertAdjacentHTML('beforeend', `<button class="linkbtn" data-watch="${f.death.battle}">Watch the final battle</button>`);
+    }
   };
 }
 
@@ -221,18 +259,26 @@ function creator() {
 
 // ---------- Lab ----------
 function lab() {
-  const k = active(), f = FRAME_BY_ID[k.frame], st = effectiveStats(k), bio = me.player.bio;
+  const k = active(), f = FRAME_BY_ID[k.frame], base = effectiveStats(k), st = applyInjuries(base, injIds(k)), bio = me.player.bio;
+  const inj = liveInjuries(k), now = Date.now(), dc = deathChance(injIds(k));
+  const healAll = inj.reduce((sum, i) => sum + healCost(i, Date.parse(i.heals_at) - now), 0);
   const pool = abilitiesForFrame(f);
   const groups = [['Exclusive', pool.filter(a => a.frames)], ['Shared', pool.filter(a => a.tags)], ['Universal', pool.filter(a => a.universal)]];
   const basic = ABILITY_BY_ID[f.basic];
   panel.innerHTML = `
     <h2>${esc(k.name)}</h2><p class="sub">${f.name} · Power ${powerRating(k)} · Elo <span class="elo">${k.elo}</span><br>Upgrades at levels 3, 6 and 9 change how it looks.</p>
+    <h3>Condition: ${condBadge(injIds(k))}</h3>
+    ${dc ? `<div class="warn">⚠ <b>${esc(k.name)} is Critical.</b> If it's knocked out in a fight you start, there's a <b>${dc}%</b> chance it dies for good. Heal it, or let it rest.</div>` : ''}
+    ${inj.length ? inj.map(i => { const c = healCost(i, Date.parse(i.heals_at) - now), d = INJURY_BY_ID[i.id]; return `<div class="card ab"><div><b>${d.name}</b> <span class="tag ${d.severity === 2 ? 'ex' : ''}">${d.severity === 2 ? 'Major' : 'Minor'}</span>
+      <div class="meta">${injText(i.id)} · heals on its own in ${timeLeft(i.heals_at)}</div></div><button class="btn small" data-heal="${i.id}" ${bio < c ? 'disabled' : ''}>Heal ${c}</button></div>`; }).join('')
+      + (inj.length > 1 ? `<button class="btn ghost small" data-heal="all" style="margin-top:6px" ${bio < healAll ? 'disabled' : ''}>Heal all (${healAll} BIO)</button>` : '')
+      : '<p class="rec" style="margin:0">No injuries. Losses (and narrow wins) can injure your Kaiju; injuries lower its stats until healed.</p>'}
     <h3>Stats</h3>
     ${STATS.map(s => {
       const lv = k.levels[s] || 0, cost = statUpgradeCost(lv);
       return `<div class="stat" title="${STAT_BLURBS[s]}"><span class="nm">${STAT_NAMES[s]}</span>
         <div class="pips">${Array.from({ length: MAX_STAT_LEVEL }, (_, i) => `<i class="pip ${i < lv ? 'on' : ''} ${[2, 5, 8].includes(i) ? 't' : ''}"></i>`).join('')}</div>
-        <span class="val">${st[s]}</span>
+        <span class="val" ${st[s] < base[s] ? `style="color:var(--bad)" title="${base[s]} when healed"` : ''}>${st[s]}</span>
         ${cost === null ? '<span class="rec" style="text-align:center">MAX</span>' : `<button class="btn small" data-up="${s}" ${bio < cost ? 'disabled' : ''}>+ ${cost}</button>`}</div>`;
     }).join('')}
     <h3>Abilities <span style="font-size:14px">(${k.abilities.length}/${MAX_EQUIPPED} equipped)</span></h3>
@@ -262,6 +308,8 @@ function lab() {
       if (r && [3, 6, 9].includes(active().levels[up.dataset.up])) toast(`${k.name} is mutating`);
     }
     if (buy) await act('unlock', { kaiju_id: k.id, ability: buy.dataset.buy });
+    const hl = e.target.closest('[data-heal]');
+    if (hl) { const r = await act('heal', { kaiju_id: k.id, injury: hl.dataset.heal }); if (r) toast('Healed'); }
     if (eq) {
       const id = eq.dataset.eq;
       let list = k.abilities.includes(id) ? k.abilities.filter(x => x !== id) : [...k.abilities, id];
@@ -286,16 +334,18 @@ async function arena() {
     offers = { kaijuId: k.id, list: r.offers };
   }
   if (screen !== 'arena') return;
-  const my = powerRating(k), left = Math.max(0, me.player.ratedPerDay - me.player.fightsToday);
+  const my = powerRating(k), left = Math.max(0, me.player.ratedPerDay - me.player.fightsToday), dc = deathChance(injIds(k));
   panel.innerHTML = `
     <h2>Arena</h2><p class="sub">${esc(k.name)} · Elo <span class="elo">${k.elo}</span> · Power ${my}<br>
-    Fights run on the server and are automatic. ${left ? `${left} rated fights left today.` : '<b>Daily rated fights used up:</b> further fights pay no Biomass or Elo until tomorrow (UTC).'}</p>
+    Condition: ${condBadge(injIds(k))}${injIds(k).length ? ' <button class="linkbtn" data-go="lab">heal</button>' : ''}</p>
+    ${dc ? `<div class="warn">⚠ <b>Critical.</b> If ${esc(k.name)} is knocked out, there's a <b>${dc}%</b> chance it dies permanently.</div>` : ''}
+    <p class="sub">Fights run on the server and are automatic. Defenders can be injured but are never killed. ${left ? `${left} rated fights left today.` : '<b>Daily rated fights used up:</b> further fights pay no Biomass or Elo until tomorrow (UTC).'}</p>
     ${offers.list.map((o, i) => {
       const e = ENV_BY_ID[o.env], s = o.snapshot, rr = powerRating(s);
       const tag = o.kind === 'player' ? `<span class="tag ex">Player</span>` : `<span class="tag">Wild</span>`;
       return `<div class="card">
         <div class="row"><b class="grow">${esc(s.name)}</b>${tag}<span class="elo" style="margin-left:6px">${o.elo}</span></div>
-        <div class="rec">${FRAME_BY_ID[s.frame].name}${o.kind === 'player' ? ' · ' + esc(s.owner) + (o.record ? ` · ${o.record[0]}W ${o.record[1]}L` : '') : ''} · Power ${rr}</div>
+        <div class="rec">${(s.injuries || []).length ? condBadge(s.injuries) + ' ' : ''}${FRAME_BY_ID[s.frame].name}${o.kind === 'player' ? ' · ' + esc(s.owner) + (o.record ? ` · ${o.record[0]}W ${o.record[1]}L` : '') : ''} · Power ${rr}</div>
         <div class="rec">${s.abilities.map(a => ABILITY_BY_ID[a]?.name).filter(Boolean).join(', ') || 'Basic attack only'}</div>
         <div class="rec" style="margin:4px 0 8px">📍 ${e.name}: ${e.blurb}</div>
         <div class="row"><span class="rec grow">${left ? `Win ≈ ${battleReward('win', my, rr)} · Loss ${battleReward('loss', my, rr)} BIO` : 'Unrated'}</span><button class="btn small" data-fight="${i}">Fight</button></div>
@@ -312,7 +362,10 @@ async function arena() {
     </div>`;
   panel.onclick = async (e) => {
     const f = e.target.closest('[data-fight]');
-    if (f) return rankedFight(+f.dataset.fight);
+    if (f) {
+      if (dc && !confirm(`${k.name} is Critical. If it is knocked out there is a ${dc}% chance it dies permanently.\n\nFight anyway?`)) return;
+      return rankedFight(+f.dataset.fight);
+    }
     if (e.target.id === 'reroll') {
       panel.classList.add('busy');
       try { const r = await api.call('offers', { kaiju_id: k.id, reroll: true }); me.player.bio = r.bio; offers = { kaijuId: k.id, list: r.offers }; updateTop(); arena(); }
@@ -334,28 +387,28 @@ async function rankedFight(slot) {
   // The server sent no events. Re-simulate locally and confirm we got the exact same fight.
   const { ok, stale, record } = verifyReplay(r.battle);
   if (stale) toast(`Server is on engine v${r.battle.v}, this page is v${ENGINE_VERSION}. Reload to update.`);
-  showBattle(record, { result: r.result, reward: r.reward, elo: r.eloDelta, rated: r.rated, verified: ok, battleId: r.battle.id });
+  showBattle(record, { result: r.result, reward: r.reward, elo: r.eloDelta, rated: r.rated, verified: ok, battleId: r.battle.id, aftermath: r.aftermath, salvage: r.salvage, mySide: 0 });
 }
 
 function spar(opp, env) {
   const k = active();
-  const record = simulateBattle({ seed: randomSeed(), env, a: { ...k, owner: me.player.name }, b: opp });
+  const record = simulateBattle({ seed: randomSeed(), env, a: snap(k, { owner: me.player.name }), b: opp });
   const result = record.winner === 0 ? 'win' : record.winner === 1 ? 'loss' : 'draw';
   showBattle(record, { result, friendly: true });
 }
 
-function watchReplay(data) {
+function watchReplay(data, aftermath) {
   const { ok, stale, record } = verifyReplay(data);
   if (stale) toast(`Replay is from engine v${data.v}; re-simulated on v${ENGINE_VERSION}, result may differ`);
   else if (!ok) toast('Warning: replay did not match its original hash');
-  showBattle(record, { replay: true, verified: ok });
+  showBattle(record, { replay: true, verified: ok, aftermath });
 }
 function watchCode(code) {
   try { const { kind, data } = codes.parseCode(code); if (kind !== 'replay') throw new Error('That is a Kaiju code, use it in the Arena'); watchReplay(data); }
   catch (err) { toast(err.message); }
 }
 async function watchBattleId(id) {
-  try { const r = await api.call('battle', { id }); watchReplay(r.battle); }
+  try { const r = await api.call('battle', { id }); watchReplay(r.battle, r.aftermath); }
   catch (e) { toast(e.message); }
 }
 
@@ -392,7 +445,7 @@ async function replays() {
       return `<div class="card click" data-rep="${i}">
         <div class="row"><b class="grow">${esc(h.fighters[0].name)} vs ${esc(h.fighters[1].name)}</b>
           <span class="${res === 'win' ? 'w' : res === 'loss' ? 'l' : 'rec'}">${res.toUpperCase()}</span></div>
-        <div class="rec">${h.side === 0 ? 'Attack' : 'Defense'} · ${ENV_BY_ID[h.env]?.name || h.env} · ${new Date(h.created_at).toLocaleString()}${reward ? ' · +' + reward + ' BIO' : ''}${delta ? ` · <span class="${delta > 0 ? 'delta-up' : 'delta-dn'}">${delta > 0 ? '+' : ''}${delta} Elo</span>` : ''}${h.rated ? '' : ' · unrated'}</div>
+        <div class="rec">${h.side === 0 ? 'Attack' : 'Defense'} · ${ENV_BY_ID[h.env]?.name || h.env} · ${new Date(h.created_at).toLocaleString()}${reward ? ' · +' + reward + ' BIO' : ''}${delta ? ` · <span class="${delta > 0 ? 'delta-up' : 'delta-dn'}">${delta > 0 ? '+' : ''}${delta} Elo</span>` : ''}${h.rated ? '' : ' · unrated'}${h.aftermath?.[h.side]?.died ? ' · <b class="l">☠ died</b>' : h.aftermath?.[h.side]?.injury ? ' · 🩸 ' + INJURY_BY_ID[h.aftermath[h.side].injury].name : ''}</div>
       </div>`;
     }).join('') : '<p class="rec">No fights yet.</p>'}
     <h3>Watch a replay code</h3>
@@ -417,7 +470,7 @@ function defenseReport() {
       const held = x.winner === 1;
       return `<div class="card click" data-def="${x.id}"><div class="row"><b class="grow">${esc(x.fighters[0].name)} <span class="rec">(${esc(x.fighters[0].owner || '')})</span> attacked ${esc(x.fighters[1].name)}</b>
         <span class="${held ? 'w' : x.winner === 0 ? 'l' : 'rec'}">${held ? 'HELD' : x.winner === 0 ? 'FELL' : 'DRAW'}</span></div>
-        <div class="rec">${ENV_BY_ID[x.env]?.name || x.env}${x.elo_delta_d ? ` · ${x.elo_delta_d > 0 ? '+' : ''}${x.elo_delta_d} Elo` : ''} · tap to watch</div></div>`;
+        <div class="rec">${x.aftermath?.[1]?.injury ? '🩸 ' + INJURY_BY_ID[x.aftermath[1].injury].name + ' · ' : ''}${ENV_BY_ID[x.env]?.name || x.env}${x.elo_delta_d ? ` · ${x.elo_delta_d > 0 ? '+' : ''}${x.elo_delta_d} Elo` : ''} · tap to watch</div></div>`;
     }).join('')}
     <button class="btn big" id="dclose" style="margin-top:12px">OK</button></div>`;
   modal.hidden = false;
@@ -429,7 +482,7 @@ function defenseReport() {
 }
 
 // ---------- Battle playback ----------
-function showBattle(record, { result, reward, elo, rated, replay, friendly, verified, battleId } = {}) {
+function showBattle(record, { result, reward, elo, rated, replay, friendly, verified, battleId, aftermath, salvage, mySide = null } = {}) {
   if (playing) { playing.stop(); playing = null; }
   panel.hidden = true; hud.hidden = false; modal.hidden = true;
   const env = ENV_BY_ID[record.env];
@@ -443,6 +496,7 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
         <div class="hp"><u></u><i></i><span></span></div>
         <div class="en"><i></i></div>
         <div class="sts"></div>
+        <div class="sts injs">${(f.injuries || []).map(id => `<span class="st inj" title="${injText(id)}">${INJURY_BY_ID[id]?.name || id}</span>`).join('')}</div>
       </div>`).join('')}
     <div class="envtag">${env.name}<br><small style="font-family:Inter;font-size:11px">${env.blurb}</small></div>
     <div class="callout" style="opacity:0"></div>
@@ -491,6 +545,8 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
         <div class="big" style="color:${result === 'loss' ? 'var(--bad)' : result === 'win' ? 'var(--good)' : '#fff'}">${esc(big)}</div>
         <div class="rec">${sub} · ${record.reason === 'ko' ? 'Knockout' : record.reason === 'decision' ? 'Time: decision on remaining HP' : 'Double knockout'} · ${record.turns} actions</div>
         ${verified !== undefined ? `<div class="${verified ? 'verified' : 'l'}" style="font-size:11px;margin-top:4px">${verified ? '✓ Re-simulated locally: identical to the server result' : '⚠ Local re-simulation did not match'}</div>` : ''}
+        ${aftermathHtml(aftermath, record.fighters, { mySide })}
+        ${salvage ? `<div class="rec">Salvaged <b style="color:var(--gold)">${salvage} BIO</b> from the remains.</div>` : ''}
         ${reward || elo ? `<div class="reward">${reward ? `+${reward} Biomass` : ''}${elo ? ` <span class="${elo > 0 ? 'delta-up' : 'delta-dn'}" style="font-size:22px">${elo > 0 ? '+' : ''}${elo} Elo</span>` : ''}</div>` : '<div style="height:18px"></div>'}
         <div class="row"><button class="btn ghost grow" id="rewatch">Replay</button><button class="btn ghost grow" id="share">Copy replay code</button></div>
         <div class="row" style="margin-top:8px">${replay || !me?.player ? `<button class="btn grow" data-go="${me?.player ? 'replays' : 'auth'}">Back</button>` : '<button class="btn ghost grow" data-go="lab">Upgrade</button><button class="btn grow" data-go="arena">Next fight</button>'}</div>
@@ -498,7 +554,7 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
       modal.hidden = false;
       modal.onclick = (e) => {
         if (e.target.closest('[data-go]')) modal.hidden = true;
-        if (e.target.id === 'rewatch') showBattle(verifyReplay(record).record, { result, replay: replay || !friendly, friendly, verified });
+        if (e.target.id === 'rewatch') showBattle(verifyReplay(record).record, { result, replay: replay || !friendly, friendly, verified, aftermath, mySide });
         if (e.target.id === 'share') navigator.clipboard?.writeText(codes.replayCode(record)).then(() => toast('Replay code copied'));
       };
     }, 900);

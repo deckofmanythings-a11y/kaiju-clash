@@ -9,6 +9,8 @@ import { FRAME_BY_ID, STATS, MAX_STAT_LEVEL } from '../_shared/kaiju/data/frames
 import { ABILITY_BY_ID, MAX_EQUIPPED, abilityAvailableTo } from '../_shared/kaiju/data/abilities.js';
 import { ENVIRONMENTS } from '../_shared/kaiju/data/environments.js';
 import { statUpgradeCost, powerRating, battleReward, generateRival } from '../_shared/kaiju/data/economy.js';
+import { INJURY_BY_ID, HEAL_HOURS, healCost } from '../_shared/kaiju/data/injuries.js';
+import { rollAftermath } from '../_shared/kaiju/engine/aftermath.js';
 
 const MAX_KAIJU = 6;
 const RATED_FIGHTS_PER_DAY = 40;
@@ -16,6 +18,7 @@ const REROLL_COST = 15;
 const DEFENSE_WIN_BIO = 25;
 const K_PVP = 32, K_WILD = 16;
 const OFFER_TTL_MS = 60 * 60 * 1000;
+const SALVAGE_PCT = 20; // % of invested Biomass returned when a Kaiju dies
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -57,9 +60,21 @@ type Kaiju = {
   id: string; owner: string; name: string; frame: string; levels: Record<string, number>;
   abilities: string[]; unlocked: string[]; colors: Record<string, string>; elo: number; version: number;
   wins: number; losses: number; draws: number; def_wins: number; def_losses: number; retired: boolean;
+  injuries: Injury[]; died_at?: string | null; death?: unknown;
 };
+type Injury = { id: string; at: string; heals_at: string };
+// Injuries that haven't healed yet. Healed ones are dropped on the next write.
+const activeInjuries = (k: Kaiju, now = Date.now()): Injury[] =>
+  (Array.isArray(k.injuries) ? k.injuries : []).filter(i => INJURY_BY_ID[i?.id] && Date.parse(i.heals_at) > now);
+const withActive = (k: Kaiju) => ({ ...k, injuries: activeInjuries(k) });
+function invested(k: Kaiju) {
+  let total = 0;
+  for (const s of STATS) for (let l = 0; l < (k.levels[s] || 0); l++) total += statUpgradeCost(l) || 0;
+  for (const id of k.unlocked || []) total += ABILITY_BY_ID[id]?.price || 0;
+  return total;
+}
 const snapshot = (k: Kaiju, ownerName?: string) =>
-  sanitizeSnapshot({ id: k.id, name: k.name, frame: k.frame, levels: k.levels, abilities: k.abilities, colors: k.colors, owner: ownerName });
+  sanitizeSnapshot({ id: k.id, name: k.name, frame: k.frame, levels: k.levels, abilities: k.abilities, colors: k.colors, owner: ownerName, injuries: activeInjuries(k).map(i => i.id) });
 const cleanColors = (c: unknown, fallback: Record<string, string>) => {
   const out = { ...fallback };
   if (c && typeof c === 'object') for (const key of ['body', 'belly', 'accent']) {
@@ -80,7 +95,7 @@ async function requirePlayer(uid: string) {
   return p;
 }
 async function myKaiju(uid: string): Promise<Kaiju[]> {
-  return must(await db.from('kb_kaiju').select('*').eq('owner', uid).eq('retired', false).order('created_at'), 'kaiju list') as Kaiju[];
+  return (must(await db.from('kb_kaiju').select('*').eq('owner', uid).eq('retired', false).order('created_at'), 'kaiju list') as Kaiju[]).map(withActive);
 }
 async function ownKaiju(uid: string, id: unknown): Promise<Kaiju> {
   const k = must(await db.from('kb_kaiju').select('*').eq('id', String(id)).eq('owner', uid).eq('retired', false).maybeSingle(), 'kaiju') as Kaiju | null;
@@ -92,6 +107,7 @@ async function spend(uid: string, k: Kaiju, cost: number, patch: Partial<Kaiju>)
   const { data, error } = await db.rpc('kb_spend', {
     p_user: uid, p_kaiju: k.id, p_version: k.version, p_cost: cost, p_levels: n.levels,
     p_abilities: n.abilities, p_unlocked: n.unlocked, p_colors: n.colors, p_name: n.name,
+    p_injuries: patch.injuries ?? activeInjuries(k),
   });
   if (error) throw new Fail(error.message.replace(/^.*?: /, ''), 409);
   return data as Kaiju;
@@ -166,13 +182,15 @@ async function bootstrap(uid: string) {
   const kaiju = await myKaiju(uid);
   let active = kaiju.find(k => k.id === player.active_kaiju) || kaiju[0] || null;
   // Defense report: fights other players started against you since you last looked.
-  const defenses = must(await db.from('kb_battles').select('id, created_at, fighters, winner, env, defense_reward, elo_delta_d')
+  const defenses = must(await db.from('kb_battles').select('id, created_at, fighters, winner, env, defense_reward, elo_delta_d, aftermath')
     .eq('defender_owner', uid).gt('created_at', player.defense_seen_at).order('created_at', { ascending: false }).limit(20), 'defenses');
   if (defenses.length) await db.from('kb_players').update({ defense_seen_at: new Date().toISOString() }).eq('user_id', uid);
   return {
     player: { name: player.display_name, bio: player.bio, active: active?.id || null,
       fightsToday: player.fights_day === utcDay() ? player.fights_today : 0, ratedPerDay: RATED_FIGHTS_PER_DAY },
     kaiju, defenses, engine: ENGINE_VERSION,
+    fallen: must(await db.from('kb_kaiju').select('id, name, frame, levels, abilities, colors, injuries, wins, losses, elo, died_at, death')
+      .eq('owner', uid).not('died_at', 'is', null).order('died_at', { ascending: false }).limit(20), 'fallen'),
   };
 }
 
@@ -250,9 +268,19 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
     return bootstrap(uid);
   },
 
+  async heal(uid, b) {
+    const k = await ownKaiju(uid, b.kaiju_id);
+    const now = Date.now(), list = activeInjuries(k, now);
+    const target = b.injury === 'all' ? list : list.filter(i => i.id === b.injury);
+    if (!target.length) throw new Fail('Nothing to heal.');
+    const cost = target.reduce((sum, i) => sum + healCost(i, Date.parse(i.heals_at) - now), 0);
+    await spend(uid, k, cost, { injuries: list.filter(i => !target.includes(i)) });
+    return bootstrap(uid);
+  },
+
   async offers(uid, b) {
     const player = await requirePlayer(uid);
-    const k = await ownKaiju(uid, b.kaiju_id || player.active_kaiju);
+    const k = await ownKaiju(uid, b.kaiju_id || player.active_kaiju || (await myKaiju(uid))[0]?.id);
     if (b.reroll) {
       const { data, error } = await db.from('kb_players').update({ bio: player.bio - REROLL_COST, rival_seed: randomSeed() })
         .eq('user_id', uid).gte('bio', REROLL_COST).eq('bio', player.bio).select().maybeSingle();
@@ -264,7 +292,7 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
 
   async fight(uid, b) {
     const player = await requirePlayer(uid);
-    const k = await ownKaiju(uid, player.active_kaiju);
+    const k = await ownKaiju(uid, player.active_kaiju || (await myKaiju(uid))[0]?.id);
     const slot = Number(b.slot);
     const offer = must(await db.from('kb_offers').select('*').eq('user_id', uid).eq('slot', slot).maybeSingle(), 'offer') as any;
     if (!offer || offer.kaiju_id !== k.id) throw new Fail('Offer expired, refresh opponents.', 409);
@@ -292,11 +320,21 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
     const deltaD = rated && opp ? -eloDelta(k.elo, oppElo, score, K_PVP) : 0;
     const defReward = rated && opp && result === 'loss' ? DEFENSE_WIN_BIO : 0;
 
+    // Aftermath: new injuries for both real Kaiju; only the attacker can die (defenders aren't there to choose).
+    const aftermath = rollAftermath(record, { injurable: [true, !!opp], canDie: [true, false] });
+    const nowMs = Date.now(), nowIso = new Date(nowMs).toISOString();
+    const entry = (id: string | null) => id ? [{ id, at: nowIso, heals_at: new Date(nowMs + HEAL_HOURS[INJURY_BY_ID[id].severity] * 3600e3).toISOString() }] : [];
+    const died = aftermath[0].died;
+    const salvage = died ? Math.floor((invested(k) * SALVAGE_PCT) / 100) : 0;
+    const death = died ? { killer: oppSnap.name, killer_owner: oppOwnerName || 'Wild Kaiju', env: record.env, salvage } : null;
+
     const { data: battleId, error } = await db.rpc('kb_settle', {
       p_user: uid, p_slot: slot, p_attacker: k.id, p_defender: opp?.id ?? null, p_defender_owner: opp?.owner ?? null,
       p_engine_v: record.v, p_seed: seed, p_env: record.env, p_fighters: record.fighters, p_winner: record.winner,
       p_reason: record.reason, p_turns: record.turns, p_hash: record.hash, p_rated: rated, p_reward: reward,
       p_def_reward: defReward, p_delta_a: deltaA, p_delta_d: deltaD, p_new_rival_seed: randomSeed(),
+      p_aftermath: aftermath, p_new_inj_a: entry(aftermath[0].injury), p_new_inj_d: entry(aftermath[1].injury),
+      p_died_a: died, p_death: death, p_salvage: salvage,
     });
     if (error) throw new Fail(error.message.replace(/^.*?: /, ''), 409);
 
@@ -304,21 +342,21 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
     return {
       battle: { id: battleId, v: record.v, seed, env: record.env, fighters: record.fighters, winner: record.winner,
         reason: record.reason, turns: record.turns, hash: record.hash },
-      result, rated, reward, eloDelta: deltaA, opponentKind: opp ? 'player' : 'wild',
+      result, rated, reward, eloDelta: deltaA, opponentKind: opp ? 'player' : 'wild', aftermath, salvage,
       ...(await bootstrap(uid)),
     };
   },
 
   async history(uid) {
-    const rows = must(await db.from('kb_battles').select('id, created_at, attacker_owner, defender_owner, env, fighters, winner, reason, reward, defense_reward, elo_delta_a, elo_delta_d, rated')
+    const rows = must(await db.from('kb_battles').select('id, created_at, attacker_owner, defender_owner, env, fighters, winner, reason, reward, defense_reward, elo_delta_a, elo_delta_d, rated, aftermath')
       .or(`attacker_owner.eq.${uid},defender_owner.eq.${uid}`).order('created_at', { ascending: false }).limit(30), 'history') as any[];
     return { history: rows.map(r => ({ ...r, side: r.attacker_owner === uid ? 0 : 1, attacker_owner: undefined, defender_owner: undefined })) };
   },
 
   async battle(_uid, b) {
-    const r = must(await db.from('kb_battles').select('id, engine_v, seed, env, fighters, winner, reason, turns, hash').eq('id', String(b.id)).maybeSingle(), 'battle') as any;
+    const r = must(await db.from('kb_battles').select('id, engine_v, seed, env, fighters, winner, reason, turns, hash, aftermath').eq('id', String(b.id)).maybeSingle(), 'battle') as any;
     if (!r) throw new Fail('Battle not found.', 404);
-    return { battle: { id: r.id, v: r.engine_v, seed: Number(r.seed), env: r.env, fighters: r.fighters, winner: r.winner, reason: r.reason, turns: r.turns, hash: r.hash } };
+    return { battle: { id: r.id, v: r.engine_v, seed: Number(r.seed), env: r.env, fighters: r.fighters, winner: r.winner, reason: r.reason, turns: r.turns, hash: r.hash }, aftermath: r.aftermath };
   },
 
   async leaderboard() {
