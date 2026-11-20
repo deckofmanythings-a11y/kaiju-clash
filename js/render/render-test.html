@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaiju Render Test</title>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+</script>
+<style>
+  :root { --bg: #0e1118; --panel: #161b26; --line: #2a3142; --text: #d8deea; --dim: #8a94a8; --acc: #5fd6ff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.35 system-ui, Segoe UI, sans-serif; }
+  #wrap { display: flex; height: 100%; }
+  #panel { width: 300px; flex: none; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px 12px; }
+  #view { position: relative; flex: 1; min-width: 0; }
+  #stage { width: 100%; height: 100%; display: block; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 14px 0 6px; }
+  label { display: block; margin: 3px 0; }
+  select, button { background: #222a3a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; font: inherit; }
+  select { width: 100%; }
+  button { cursor: pointer; margin: 2px 2px 2px 0; }
+  button:hover { border-color: var(--acc); }
+  .row { display: flex; align-items: center; gap: 6px; }
+  .row input[type=range] { flex: 1; }
+  .row span { width: 52px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .abil label { display: flex; gap: 6px; align-items: center; }
+  .abil small { color: var(--dim); }
+  #hud { position: absolute; left: 12px; right: 12px; top: 10px; display: flex; justify-content: space-between; pointer-events: none; }
+  .hp { width: 38%; }
+  .hp .bar { height: 10px; background: #300; border: 1px solid #000; border-radius: 3px; overflow: hidden; }
+  .hp .fill { height: 100%; background: linear-gradient(#7f7, #2a2); width: 100%; transition: width .25s; }
+  .hp .name { font-weight: 700; text-shadow: 0 1px 2px #000; }
+  #log { position: absolute; right: 12px; bottom: 10px; width: 330px; max-height: 40%; overflow-y: auto; background: rgba(10,12,18,.72); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 11px/1.3 ui-monospace, Consolas, monospace; }
+  #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #err { color: #ff8a8a; white-space: pre-wrap; font: 11px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="panel">
+    <h2>Fighter A / Showcase</h2>
+    <select id="frameA"></select>
+    <h2>Stat levels (A)</h2>
+    <div id="stats"></div>
+    <div class="row" style="margin-top:4px"><button id="lv0">All 0</button><button id="lv3">Tier 1</button><button id="lv6">Tier 2</button><button id="lv9">Tier 3</button></div>
+    <h2>Abilities (A)</h2>
+    <div id="abil" class="abil"></div>
+    <h2>Fighter B</h2>
+    <select id="frameB"></select>
+    <label><input type="checkbox" id="bSame" checked> B uses A's levels</label>
+    <h2>Environment</h2>
+    <select id="env"></select>
+    <h2>View</h2>
+    <button id="btnShow">Showcase A</button>
+    <button id="btnPair">Face off</button>
+    <button id="btnGallery">Gallery (all 12)</button>
+    <h2>Battle</h2>
+    <button id="btnPlay">Play fake battle</button>
+    <button id="btnPause">Pause</button>
+    <button id="btnSkip">Skip to end</button>
+    <button id="btnStop">Stop</button>
+    <label class="row">Speed <select id="speed"><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></label>
+    <div id="err"></div>
+  </div>
+  <div id="view">
+    <canvas id="stage"></canvas>
+    <div id="hud">
+      <div class="hp"><div class="name" id="nA">A</div><div class="bar"><div class="fill" id="hA"></div></div></div>
+      <div class="hp" style="text-align:right"><div class="name" id="nB">B</div><div class="bar"><div class="fill" id="hB" style="margin-left:auto"></div></div></div>
+    </div>
+    <div id="log"></div>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { createStage } from './stage.js';
+import { buildKaijuModel, disposeObject } from './kaiju-model.js';
+import { playBattle } from './playback.js';
+import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES } from '../data/frames.js';
+import { ABILITY_BY_ID, abilitiesForFrame } from '../data/abilities.js';
+import { ENVIRONMENTS } from '../data/environments.js';
+
+const $ = (s) => document.querySelector(s);
+const errBox = $('#err');
+window.addEventListener('error', e => { errBox.textContent += (e.message || e) + '\n'; });
+window.addEventListener('unhandledrejection', e => { errBox.textContent += 'Promise: ' + (e.reason?.message || e.reason) + '\n'; });
+
+const stage = createStage($('#stage'));
+const levels = Object.fromEntries(STATS.map(s => [s, 0]));
+let equipped = new Set();
+let gallery = [], galleryTicker = null, playing = null;
+
+// ---- UI
+for (const sel of ['#frameA', '#frameB']) for (const f of FRAMES) sel && $(sel).insertAdjacentHTML('beforeend', `<option value="${f.id}">${f.name} (${f.plan})</option>`);
+$('#frameB').value = 'mecha';
+$('#env').insertAdjacentHTML('beforeend', `<option value="studio">Studio</option>`);
+for (const e of ENVIRONMENTS) $('#env').insertAdjacentHTML('beforeend', `<option value="${e.id}">${e.name} (${e.id})</option>`);
+for (const s of STATS) {
+  $('#stats').insertAdjacentHTML('beforeend', `<div class="row"><label style="width:60px">${STAT_NAMES[s]}</label><input type="range" min="0" max="10" value="0" data-s="${s}"><span id="v_${s}">0</span></div>`);
+}
+$('#stats').addEventListener('input', e => { const s = e.target.dataset.s; if (!s) return; levels[s] = +e.target.value; $('#v_' + s).textContent = levels[s]; refresh(); });
+const setAll = (n) => { for (const s of STATS) { levels[s] = n; $(`input[data-s=${s}]`).value = n; $('#v_' + s).textContent = n; } refresh(); };
+$('#lv0').onclick = () => setAll(0); $('#lv3').onclick = () => setAll(3); $('#lv6').onclick = () => setAll(6); $('#lv9').onclick = () => setAll(9);
+
+function renderAbilities() {
+  const f = FRAME_BY_ID[$('#frameA').value];
+  equipped = new Set([f.exclusive[0]]);
+  $('#abil').innerHTML = abilitiesForFrame(f).map(a =>
+    `<label><input type="checkbox" value="${a.id}" ${equipped.has(a.id) ? 'checked' : ''}> ${a.name} <small>${a.fx}${a.vis ? ' / vis:' + a.vis : ''}</small></label>`).join('');
+}
+$('#abil').addEventListener('change', e => { if (e.target.checked) equipped.add(e.target.value); else equipped.delete(e.target.value); refresh(); });
+$('#frameA').onchange = () => { renderAbilities(); refresh(); };
+$('#frameB').onchange = () => refresh();
+$('#bSame').onchange = () => refresh();
+$('#env').onchange = () => { stage.setEnvironment($('#env').value); };
+
+function snapA() { const f = FRAME_BY_ID[$('#frameA').value]; return { id: 'A-' + f.id, name: f.name, frame: f.id, levels: { ...levels }, abilities: [...equipped], colors: { ...f.colors } }; }
+function snapB() {
+  const f = FRAME_BY_ID[$('#frameB').value];
+  const ex = f.exclusive.slice();
+  const vis = abilitiesForFrame(f).filter(a => a.vis).map(a => a.id).slice(0, 2);
+  return { id: 'B-' + f.id, name: f.name, frame: f.id, levels: $('#bSame').checked ? { ...levels } : { hp: 4, pow: 4, enr: 4, arm: 4, spd: 4, fcs: 4 }, abilities: [...new Set([...ex.slice(0, 2), ...vis])].slice(0, 4), colors: { ...f.colors } };
+}
+
+let mode = 'show';
+function clearGallery() {
+  for (const m of gallery) disposeObject(m);
+  gallery = [];
+  if (galleryTicker) { galleryTicker(); galleryTicker = null; }
+}
+function refresh() {
+  if (mode === 'show') showcase();
+  else if (mode === 'pair') faceOff();
+  else if (mode === 'gallery') showGallery();
+}
+function stopPlaying() { if (playing) { playing.stop(); playing = null; } }
+function showcase() { stopPlaying(); clearGallery(); mode = 'show'; stage.showcase(snapA()); }
+function faceOff() { stopPlaying(); clearGallery(); mode = 'pair'; stage.setFighters(snapA(), snapB()); }
+function showGallery(lv) {
+  stopPlaying(); clearGallery(); mode = 'gallery';
+  stage.setFighters({ frame: 'saurian' }, { frame: 'saurian' });
+  // hide fighters for the gallery
+  for (const f of stage.fighters) f.visible = false;
+  const cols = 4, gapX = 26, gapZ = 30;
+  const y = stage.arena ? stage.arena.showcaseY : 0;
+  FRAMES.forEach((f, i) => {
+    const vis = abilitiesForFrame(f).filter(a => a.vis).map(a => a.id);
+    const lvls = lv != null ? Object.fromEntries(STATS.map(s => [s, lv])) : { ...levels };
+    const m = buildKaijuModel({ id: 'g' + f.id, name: f.name, frame: f.id, levels: lvls, abilities: lv >= 9 ? vis.slice(0, 3) : [], colors: f.colors });
+    const c = i % cols, r = Math.floor(i / cols);
+    m.position.set((c - (cols - 1) / 2) * gapX, y, (r - 1) * gapZ);
+    m.rotation.y = 0.7;
+    stage.scene.add(m);
+    gallery.push(m);
+  });
+  galleryTicker = stage.addTicker((dt, t) => { for (const m of gallery) m.userData.rig.update(dt, t); });
+  stage.director.free(new THREE.Vector3(30, 62, 105), new THREE.Vector3(0, 4, 0));
+}
+$('#btnShow').onclick = showcase;
+$('#btnPair').onclick = faceOff;
+$('#btnGallery').onclick = () => showGallery();
+
+// ---- fake battle covering every event type and fx kind
+function makeFakeRecord(A, B, env) {
+  const maxHp = [3000, 3000], hp = [3000, 3000];
+  const ev = [];
+  const push = (e) => { ev.push(e); return e; };
+  const hit = (a, dmg, o = {}) => { const tg = 1 - a; hp[tg] = Math.max(0, hp[tg] - dmg); return push({ t: 'hit', a, tg, dmg, crit: !!o.crit, type: o.type || 'physical', hp: hp[tg], absorbed: o.absorbed || 0, hitNo: o.hitNo || 1, hits: o.hits || 1 }); };
+  const miss = (a, o = {}) => push({ t: 'miss', a, tg: 1 - a, hitNo: o.hitNo || 1, hits: o.hits || 1 });
+  const use = (a, ab, fx) => push({ t: 'use', a, tg: 1 - a, ab, fx, name: ABILITY_BY_ID[ab]?.name || ab });
+  let n = 0;
+  const turn = (a) => push({ t: 'turn', n: ++n, a, en: 50 });
+  push({ t: 'start' });
+  turn(0); use(0, 'claw', 'melee'); hit(0, 110);
+  turn(1); use(1, 'missile_barrage', 'projectile');
+  for (let k = 1; k <= 5; k++) k === 3 ? miss(1, { hitNo: k, hits: 5 }) : hit(1, k === 5 ? 140 : 60, { crit: k === 5, type: 'fire', hitNo: k, hits: 5 });
+  push({ t: 'status', tg: 0, st: 'burn', turns: 2 });
+  turn(0); use(0, 'atomic_breath', 'beam'); hit(0, 380, { crit: true, type: 'fire' }); push({ t: 'status', tg: 1, st: 'burn', turns: 2 });
+  push({ t: 'dot', tg: 1, st: 'burn', dmg: 40, hp: (hp[1] -= 40) });
+  turn(1); use(1, 'stomp', 'aoe'); hit(1, 130); push({ t: 'status', tg: 0, st: 'stun', turns: 1 });
+  push({ t: 'dot', tg: 0, st: 'burn', dmg: 35, hp: (hp[0] -= 35) });
+  turn(0); push({ t: 'skip', a: 0, reason: 'stun' }); push({ t: 'expire', tg: 0, st: 'stun' });
+  turn(1); use(1, 'grapple', 'grab'); hit(1, 220);
+  turn(0); use(0, 'roar', 'roar'); push({ t: 'status', tg: 1, st: 'weaken', turns: 2 });
+  turn(1); use(1, 'regenerate', 'heal'); push({ t: 'heal', tg: 1, amt: 300, hp: (hp[1] = Math.min(maxHp[1], hp[1] + 300)) });
+  turn(0); use(0, 'brace', 'shield'); push({ t: 'status', tg: 0, st: 'shield', turns: 3 });
+  turn(1); use(1, 'overclock', 'buff'); push({ t: 'status', tg: 1, st: 'haste', turns: 3 }); push({ t: 'status', tg: 1, st: 'charged', turns: 3 }); push({ t: 'selfdmg', a: 1, dmg: 75, hp: (hp[1] -= 75) });
+  turn(0); use(0, 'hammer_fists', 'multi'); hit(0, 90, { hitNo: 1, hits: 2 }); hit(0, 95, { hitNo: 2, hits: 2 });
+  turn(1); use(1, 'scythe_flurry', 'multi'); hit(1, 20, { absorbed: 30, hitNo: 1, hits: 4 }); hit(1, 0, { absorbed: 45, hitNo: 2, hits: 4 }); miss(1, { hitNo: 3, hits: 4 }); hit(1, 120, { crit: true, hitNo: 4, hits: 4 });
+  push({ t: 'expire', tg: 0, st: 'shield' });
+  turn(0); use(0, 'mountain_toss', 'projectile'); miss(0);
+  turn(1); use(1, 'web_snare', 'projectile'); push({ t: 'status', tg: 0, st: 'bind', turns: 2 }); push({ t: 'status', tg: 0, st: 'slow', turns: 3 });
+  turn(0); use(0, 'breath_barrage', 'beam'); hit(0, 80, { type: 'fire', hitNo: 1, hits: 3 }); hit(0, 85, { type: 'acid', hitNo: 2, hits: 3 }); miss(0, { hitNo: 3, hits: 3 });
+  turn(1); use(1, 'ink_cloud', 'aoe'); push({ t: 'status', tg: 0, st: 'blind', turns: 3 }); push({ t: 'status', tg: 1, st: 'evasive', turns: 2 });
+  turn(0); push({ t: 'skip', a: 0, reason: 'bind' });
+  push({ t: 'status', tg: 1, st: 'poison', turns: 2 }); push({ t: 'dot', tg: 1, st: 'poison', dmg: 45, hp: (hp[1] -= 45) });
+  const hz = (name, type, tgs, dmg) => push({ t: 'hazard', name, type, hits: tgs.map(tg => ({ tg, dmg, hp: (hp[tg] -= dmg) })) });
+  hz('Eruption', 'fire', [0, 1], 90); hz('Whiteout', 'cold', [1], 60); hz('Sandstorm', 'physical', [0], 60); hz('Lightning Strike', 'electric', [1], 80);
+  push({ t: 'expire', tg: 0, st: 'bind' }); push({ t: 'expire', tg: 0, st: 'slow' }); push({ t: 'expire', tg: 0, st: 'blind' });
+  turn(1); use(1, 'mystery_move', 'telekinesis'); hit(1, 70);
+  turn(0); use(0, 'rampage', 'melee'); miss(0);
+  turn(1); use(1, 'tail_sweep', 'melee'); hit(1, 100);
+  turn(0); use(0, 'thunder_lash', 'beam'); hit(0, hp[1], { crit: true, type: 'electric' });
+  push({ t: 'ko', tg: 1 });
+  push({ t: 'end', winner: 0, reason: 'ko' });
+  return { v: 'test', seed: 1, env, fighters: [A, B], meta: [{ maxHp: maxHp[0], stats: {} }, { maxHp: maxHp[1], stats: {} }], events: ev, winner: 0, reason: 'ko', turns: n, hash: 0 };
+}
+
+const hpNow = [1, 1];
+function setHp(k, hp, max) { hpNow[k] = hp; $(k ? '#hB' : '#hA').style.width = Math.max(0, 100 * hp / max) + '%'; }
+function log(s) { const d = document.createElement('div'); d.textContent = s; $('#log').prepend(d); }
+function playFake() {
+  stopPlaying(); clearGallery(); mode = 'battle';
+  const env = $('#env').value;
+  const rec = makeFakeRecord(snapA(), snapB(), env === 'studio' ? 'city' : env);
+  window.__lastRecord = rec;
+  $('#env').value = rec.env;
+  stage.setEnvironment(rec.env);
+  stage.setFighters(rec.fighters[0], rec.fighters[1]);
+  $('#nA').textContent = rec.fighters[0].name; $('#nB').textContent = rec.fighters[1].name;
+  setHp(0, rec.meta[0].maxHp, rec.meta[0].maxHp); setHp(1, rec.meta[1].maxHp, rec.meta[1].maxHp);
+  $('#log').innerHTML = '';
+  window.__events = [];
+  playing = playBattle(stage, rec, {
+    speed: +$('#speed').value,
+    onEvent(ev, i) {
+      window.__events.push(i);
+      if ('hp' in ev && ev.tg != null) setHp(ev.tg, ev.hp, rec.meta[ev.tg].maxHp);
+      if (ev.t === 'hazard') for (const h of ev.hits) setHp(h.tg, h.hp, rec.meta[h.tg].maxHp);
+      if (ev.t === 'selfdmg') setHp(ev.a, ev.hp, rec.meta[ev.a].maxHp);
+      log(`${i}: ${ev.t} ${ev.name || ev.st || ev.reason || ''} ${ev.dmg ?? ev.amt ?? ''}${ev.crit ? ' CRIT' : ''}`);
+    },
+    onDone() { log('-- done --'); window.__done = true; },
+  });
+  window.__playing = playing;
+}
+$('#btnPlay').onclick = playFake;
+$('#btnPause').onclick = () => { if (!playing) return; if (playing.paused) { playing.resume(); $('#btnPause').textContent = 'Pause'; } else { playing.pause(); $('#btnPause').textContent = 'Resume'; } };
+$('#btnSkip').onclick = () => playing?.skipToEnd();
+$('#btnStop').onclick = () => stopPlaying();
+$('#speed').onchange = () => playing?.setSpeed(+$('#speed').value);
+
+renderAbilities();
+showcase();
+// automation hooks for screenshots
+window.__kb = { stage, THREE, buildKaijuModel, showcase, faceOff, showGallery, playFake, setAll, levels, equipped, FRAMES,
+  pick(frame, lv, abil) { $('#frameA').value = frame; renderAbilities(); if (abil) { equipped.clear(); abil.forEach(a => equipped.add(a)); } setAll(lv); },
+  env(id) { $('#env').value = id; stage.setEnvironment(id); } };
+</script>
+</body>
+</html>

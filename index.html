@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaiju Clash</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<header id="topbar">
+  <div class="logo">KAIJU <span>CLASH</span></div>
+  <nav id="nav">
+    <button data-go="hangar">Hangar</button>
+    <button data-go="lab">Lab</button>
+    <button data-go="arena">Arena</button>
+    <button data-go="replays">Replays</button>
+  </nav>
+  <div class="bio" title="Biomass: earned in battle, spent on upgrades"><b id="bio">0</b> BIO</div>
+</header>
+<main id="panel"></main>
+<section id="hud" hidden></section>
+<div id="modal" hidden></div>
+<div id="toast" hidden></div>
+<script type="module" src="js/app/main.js"></script>
+</body>
+</html>
