@@ -1,56 +1,58 @@
 import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES, STAT_BLURBS, MAX_STAT_LEVEL, effectiveStats } from '../data/frames.js';
 import { ABILITY_BY_ID, STATUSES, MAX_EQUIPPED, abilitiesForFrame, abilityScope } from '../data/abilities.js';
-import { ENV_BY_ID } from '../data/environments.js';
-import { statUpgradeCost, powerRating, battleReward, generateRival, newKaiju } from '../data/economy.js';
+import { ENV_BY_ID, ENVIRONMENTS } from '../data/environments.js';
+import { statUpgradeCost, powerRating, battleReward } from '../data/economy.js';
 import { simulateBattle, verifyReplay, ENGINE_VERSION } from '../engine/battle.js';
-import { createRng, hashString, randomSeed } from '../engine/rng.js';
-import * as store from './store.js';
+import { randomSeed, createRng } from '../engine/rng.js';
+import * as codes from './codes.js';
+import * as api from './api.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const panel = $('#panel'), hud = $('#hud'), modal = $('#modal');
+const NEG = new Set(['burn', 'poison', 'bleed', 'stun', 'bind', 'slow', 'blind', 'weaken', 'sunder']);
 
-store.load();
-let screen = 'hangar';
+let me = null;                 // server bootstrap: { player, kaiju, defenses }
+let screen = null, offers = null, ladder = null, history = null;
 let draft = { frame: 'saurian', name: '', colors: { ...FRAME_BY_ID.saurian.colors } };
-let stage = null, playBattle = null, playing = null;
+let stage = null, playBattle = null, playing = null, currentEnv = null;
+let authMode = 'signin';
 
-// ---------- 3D stage (optional: app still works text-only if the renderer fails to load) ----------
-async function initStage() {
-  try {
-    const [st, pb] = await Promise.all([import('../render/stage.js'), import('../render/playback.js')]);
-    stage = st.createStage($('#stage'));
-    playBattle = pb.playBattle;
-    window.addEventListener('resize', () => stage.resize());
-    setEnv('city');
-    refreshShowcase();
-  } catch (e) {
-    console.warn('3D renderer unavailable, running text-only', e);
-  }
-}
-
-let currentEnv = null;
-function setEnv(id) { if (stage && currentEnv !== id) { stage.setEnvironment(id); currentEnv = id; } }
-
-function refreshShowcase() {
-  if (!stage) return;
-  try {
-    if (screen === 'creator') stage.showcase({ name: draft.name, frame: draft.frame, levels: {}, abilities: [FRAME_BY_ID[draft.frame].exclusive[0]], colors: draft.colors });
-    else { const k = store.active(); if (k) stage.showcase(k); }
-  } catch (e) { console.warn(e); }
-}
-
+// ---------- helpers ----------
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
-  clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), 2600);
+  clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), 3000);
 }
-function updateBio() { $('#bio').textContent = store.S().bio.toLocaleString(); }
+const active = () => me?.kaiju?.find(k => k.id === me.player.active) || me?.kaiju?.[0] || null;
+function updateTop() {
+  $('#bio').textContent = me?.player ? me.player.bio.toLocaleString() : '–';
+  const a = $('#acct');
+  a.hidden = !me?.player; if (me?.player) a.textContent = `${me.player.name} · Sign out`;
+  $('#nav').style.visibility = me?.player ? 'visible' : 'hidden';
+}
+function applyBoot(b) {
+  if (b.player) me = { player: b.player, kaiju: b.kaiju, defenses: b.defenses || [] };
+  if (b.needsName) me = { needsName: true };
+  updateTop();
+}
+// Every server mutation goes through here: lock the panel, apply the fresh bootstrap, re-render.
+async function act(action, payload, { rerender = true } = {}) {
+  panel.classList.add('busy');
+  try {
+    const res = await api.call(action, payload);
+    applyBoot(res);
+    if (rerender) { const y = panel.scrollTop; render(); panel.scrollTop = y; refreshShowcase(); }
+    return res;
+  } catch (e) {
+    toast(e.message);
+    if (e.status === 401) { me = null; go('auth'); }
+    return null;
+  } finally { panel.classList.remove('busy'); }
+}
 
 function describe(ab) {
   const bits = [];
-  if (ab.kind === 'attack') {
-    bits.push(`${ab.type === 'random' ? ab.randomTypes.join('/') : ab.type} · power ${ab.power}${ab.hits ? ' ×' + ab.hits : ''} · scales ${STAT_NAMES[ab.stat || 'pow']}`);
-  }
+  if (ab.kind === 'attack') bits.push(`${ab.type === 'random' ? ab.randomTypes.join('/') : ab.type} · power ${ab.power}${ab.hits ? ' ×' + ab.hits : ''} · scales ${STAT_NAMES[ab.stat || 'pow']}`);
   if (ab.heal) bits.push(`heals ${ab.heal}% HP${ab.cleanse ? ', cleanses debuffs' : ''}`);
   for (const e of ab.effects || []) bits.push(`${e.chance < 100 ? e.chance + '% ' : ''}${STATUSES[e.status].name} ${e.turns}t`);
   for (const e of ab.selfEffects || []) bits.push(`self: ${STATUSES[e.status].name} ${e.turns}t`);
@@ -61,45 +63,123 @@ function describe(ab) {
   return bits.join(' · ');
 }
 
+// ---------- 3D stage (optional) ----------
+function setEnv(id) { if (stage && currentEnv !== id) { stage.setEnvironment(id); currentEnv = id; } }
+function refreshShowcase() {
+  if (!stage) return;
+  try {
+    if (screen === 'creator') stage.showcase({ name: draft.name, frame: draft.frame, levels: {}, abilities: [FRAME_BY_ID[draft.frame].exclusive[0]], colors: draft.colors });
+    else { const k = active(); stage.showcase(k || { frame: 'saurian', levels: {}, abilities: [], colors: FRAME_BY_ID.saurian.colors }); }
+  } catch (e) { console.warn(e); }
+}
+async function initStage() {
+  try {
+    const [st, pb] = await Promise.all([import('../render/stage.js'), import('../render/playback.js')]);
+    stage = st.createStage($('#stage'));
+    playBattle = pb.playBattle;
+    window.addEventListener('resize', () => stage.resize());
+    setEnv('city'); refreshShowcase();
+  } catch (e) { console.warn('3D renderer unavailable, running text-only', e); }
+}
+
 // ---------- Router ----------
+const SCREENS = { auth, name: nameScreen, hangar, creator, lab, arena, ladder: ladderScreen, replays };
 function go(s) {
   if (playing) { playing.stop(); playing = null; }
-  const k = store.active();
-  if (!k && s !== 'creator' && s !== 'replays') s = 'creator';
+  if (!me) s = 'auth';
+  else if (me.needsName) s = 'name';
+  else if (!active() && !['creator', 'ladder', 'replays'].includes(s)) s = 'creator';
   screen = s;
-  hud.hidden = true; panel.hidden = false;
+  hud.hidden = true; panel.hidden = false; modal.hidden = true;
   for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.go === s);
-  updateBio();
-  ({ hangar, creator, lab, arena, replays })[s]();
-  if (stage) { setEnv('city'); refreshShowcase(); }
+  updateTop();
+  render();
+  setEnv('city'); refreshShowcase();
 }
+function render() { SCREENS[screen](); }
 document.addEventListener('click', (e) => {
   const g = e.target.closest('[data-go]'); if (g) go(g.dataset.go);
+  if (e.target.closest('#acct')) signOut();
 });
+async function signOut() { await api.signOut(); me = null; offers = ladder = history = null; go('auth'); }
+
+// ---------- Auth ----------
+function auth() {
+  const recovering = authMode === 'recover';
+  panel.innerHTML = `<div class="auth">
+    <h2>${recovering ? 'Set a new password' : authMode === 'signup' ? 'Create account' : 'Sign in'}</h2>
+    <p class="sub">${recovering ? 'Choose a new password for your account.' : 'Build a Kaiju, then climb a ladder against other players’ Kaiju. Fights run on the server and replay identically.'}</p>
+    <form id="authf">
+      ${recovering ? '' : '<label>Email</label><input type="email" id="em" autocomplete="email" required>'}
+      ${authMode === 'forgot' ? '' : `<label>${recovering ? 'New password' : 'Password'}</label><input type="password" id="pw" minlength="6" autocomplete="${authMode === 'signin' ? 'current-password' : 'new-password'}" required>`}
+      <button class="btn big" style="margin-top:14px">${({ signin: 'Sign in', signup: 'Create account', forgot: 'Send reset email', recover: 'Save password' })[authMode]}</button>
+      <div class="err" id="aerr"></div>
+    </form>
+    ${recovering ? '' : `<div class="row" style="justify-content:space-between">
+      <button class="linkbtn" data-mode="${authMode === 'signin' ? 'signup' : 'signin'}">${authMode === 'signin' ? 'New here? Create an account' : 'Have an account? Sign in'}</button>
+      ${authMode === 'signin' ? '<button class="linkbtn" data-mode="forgot">Forgot password</button>' : ''}</div>`}
+    <h3>Watch a replay</h3>
+    <textarea id="rcode" placeholder="KR1.… replay code"></textarea>
+    <button class="btn ghost small" id="watch" style="margin-top:6px">Watch</button></div>`;
+  panel.onclick = (e) => {
+    const m = e.target.closest('[data-mode]'); if (m) { authMode = m.dataset.mode; auth(); }
+    if (e.target.id === 'watch') watchCode($('#rcode').value);
+  };
+  $('#authf').onsubmit = async (e) => {
+    e.preventDefault();
+    const em = $('#em')?.value.trim(), pw = $('#pw')?.value, err = $('#aerr');
+    err.textContent = ''; panel.classList.add('busy');
+    try {
+      let r;
+      if (authMode === 'signin') r = await api.signIn(em, pw);
+      else if (authMode === 'signup') r = await api.signUp(em, pw);
+      else if (authMode === 'forgot') { r = await api.resetPassword(em); if (!r.error) { err.style.color = 'var(--good)'; err.textContent = 'Check your email for a reset link.'; return; } }
+      else r = await api.sb.auth.updateUser({ password: pw });
+      if (r.error) { err.textContent = r.error.message; return; }
+      if (authMode === 'signup' && !r.data.session) { err.style.color = 'var(--good)'; err.textContent = 'Check your email to confirm, then sign in.'; return; }
+      authMode = 'signin';
+      await boot();
+    } finally { panel.classList.remove('busy'); }
+  };
+}
+
+function nameScreen() {
+  panel.innerHTML = `<div class="auth"><h2>Choose a display name</h2>
+    <p class="sub">Shown on the ladder and to everyone your Kaiju fights. 2–20 characters.</p>
+    <form id="nf"><input type="text" id="dn" maxlength="20" minlength="2" required placeholder="Display name">
+    <button class="btn big" style="margin-top:12px">Continue</button><div class="err" id="nerr"></div></form>
+    <button class="linkbtn" id="so" style="margin-top:10px">Sign out</button></div>`;
+  $('#nf').onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await act('register', { display_name: $('#dn').value }, { rerender: false });
+    if (r) go('creator');
+  };
+  panel.onclick = (e) => { if (e.target.id === 'so') signOut(); };
+}
 
 // ---------- Hangar ----------
 function hangar() {
-  const S = store.S(), k = store.active();
+  const k = active();
   panel.innerHTML = `
-    <h2>Hangar</h2><p class="sub">Your Kaiju roster. Biomass is shared across all of them.</p>
-    ${S.kaiju.map(x => `
+    <h2>Hangar</h2><p class="sub">Your roster. Biomass is shared across all of them. The <b>active</b> Kaiju fights in the Arena and defends you on the ladder while you're away.</p>
+    ${me.kaiju.map(x => `
       <div class="card click ${x.id === k.id ? 'sel' : ''}" data-pick="${x.id}">
-        <div class="row"><b class="grow">${esc(x.name)}</b><span class="rec"><span class="w">${x.record.w}W</span> · <span class="l">${x.record.l}L</span> · ${x.record.d}D</span></div>
-        <div class="rec">${FRAME_BY_ID[x.frame].name} · Power ${powerRating(x)}</div>
+        <div class="row"><b class="grow">${esc(x.name)}${x.id === k.id ? ' <span class="tag ex">Active</span>' : ''}</b><span class="elo">${x.elo}</span></div>
+        <div class="rec">${FRAME_BY_ID[x.frame].name} · Power ${powerRating(x)} · <span class="w">${x.wins}W</span> <span class="l">${x.losses}L</span> ${x.draws}D · Defense ${x.def_wins}–${x.def_losses}</div>
       </div>`).join('')}
-    <div class="row" style="margin-top:12px"><button class="btn ghost grow" data-go="creator">+ New Kaiju</button><button class="btn grow" data-go="arena">To the Arena</button></div>
-    <h3>Share ${esc(k.name)}</h3>
-    <p class="sub">Send this code to a friend. They can paste it in the Arena to fight your Kaiju.</p>
-    <textarea readonly id="mycode">${store.kaijuCode(k)}</textarea>
-    <button class="btn ghost small" id="copycode" style="margin-top:6px">Copy code</button>
-    ${S.kaiju.length > 1 ? `<button class="btn ghost small" id="release" style="margin-top:6px;float:right">Release ${esc(k.name)}</button>` : ''}`;
-  panel.onclick = (e) => {
+    <div class="row" style="margin-top:12px"><button class="btn ghost grow" data-go="creator" ${me.kaiju.length >= 6 ? 'disabled' : ''}>+ New Kaiju</button><button class="btn grow" data-go="arena">To the Arena</button></div>
+    <h3>Friendly code for ${esc(k.name)}</h3>
+    <p class="sub">A friend can paste this in the Arena for an unrated sparring match.</p>
+    <textarea readonly id="mycode">${codes.kaijuCode({ ...k, owner: me.player.name })}</textarea>
+    <div class="row" style="margin-top:6px"><button class="btn ghost small" id="copycode">Copy code</button><span class="grow"></span>
+    ${me.kaiju.length > 1 ? `<button class="btn ghost small" id="release">Release ${esc(k.name)}</button>` : ''}</div>
+    <p style="margin-top:24px"><button class="linkbtn" id="so">Sign out (${esc(me.player.name)})</button></p>`;
+  panel.onclick = async (e) => {
     const p = e.target.closest('[data-pick]');
-    if (p) { S.activeId = p.dataset.pick; store.save(); hangar(); refreshShowcase(); }
+    if (p && p.dataset.pick !== k.id) { offers = null; await act('set_active', { kaiju_id: p.dataset.pick }); }
     if (e.target.id === 'copycode') navigator.clipboard?.writeText($('#mycode').value).then(() => toast('Code copied'));
-    if (e.target.id === 'release' && confirm(`Release ${k.name}? It is gone forever (Biomass stays).`)) {
-      S.kaiju = S.kaiju.filter(x => x.id !== k.id); S.activeId = S.kaiju[0].id; store.save(); hangar(); refreshShowcase();
-    }
+    if (e.target.id === 'release' && confirm(`Release ${k.name}? It leaves the ladder for good (Biomass stays).`)) { offers = null; await act('retire', { kaiju_id: k.id }); }
+    if (e.target.id === 'so') signOut();
   };
 }
 
@@ -124,17 +204,13 @@ function creator() {
       <label class="row rec">Glow <input type="color" data-col="accent" value="${draft.colors.accent}"></label>
     </div>
     <button class="btn big" id="create" style="margin-top:16px">Create ${f.name}</button>`;
-  panel.onclick = (e) => {
+  panel.onclick = async (e) => {
     const fr = e.target.closest('[data-frame]');
     if (fr) { draft.frame = fr.dataset.frame; draft.colors = { ...FRAME_BY_ID[draft.frame].colors }; creator(); refreshShowcase(); }
     if (e.target.id === 'create') {
-      const name = $('#kname').value.trim() || `${f.name} ${store.S().kaiju.length + 1}`;
-      const k = newKaiju(draft.frame, name);
-      k.colors = { ...draft.colors };
-      store.S().kaiju.push(k); store.S().activeId = k.id; store.save();
-      draft.name = '';
-      toast(`${name} has awakened`);
-      go('lab');
+      const name = $('#kname').value.trim() || f.name;
+      const r = await act('create_kaiju', { frame: draft.frame, name, colors: draft.colors }, { rerender: false });
+      if (r) { draft.name = ''; offers = null; toast(`${name} has awakened`); go('lab'); }
     }
   };
   panel.oninput = (e) => {
@@ -143,25 +219,21 @@ function creator() {
   };
 }
 
-// ---------- Lab (upgrades) ----------
+// ---------- Lab ----------
 function lab() {
-  const S = store.S(), k = store.active(), f = FRAME_BY_ID[k.frame], st = effectiveStats(k);
+  const k = active(), f = FRAME_BY_ID[k.frame], st = effectiveStats(k), bio = me.player.bio;
   const pool = abilitiesForFrame(f);
-  const groups = [
-    ['Exclusive', pool.filter(a => a.frames)],
-    ['Shared', pool.filter(a => a.tags)],
-    ['Universal', pool.filter(a => a.universal)],
-  ];
+  const groups = [['Exclusive', pool.filter(a => a.frames)], ['Shared', pool.filter(a => a.tags)], ['Universal', pool.filter(a => a.universal)]];
   const basic = ABILITY_BY_ID[f.basic];
   panel.innerHTML = `
-    <h2>${esc(k.name)}</h2><p class="sub">${f.name} · Power ${powerRating(k)} · Upgrades at levels 3, 6 and 9 change how it looks.</p>
+    <h2>${esc(k.name)}</h2><p class="sub">${f.name} · Power ${powerRating(k)} · Elo <span class="elo">${k.elo}</span><br>Upgrades at levels 3, 6 and 9 change how it looks.</p>
     <h3>Stats</h3>
     ${STATS.map(s => {
-      const lv = k.levels[s], cost = statUpgradeCost(lv);
+      const lv = k.levels[s] || 0, cost = statUpgradeCost(lv);
       return `<div class="stat" title="${STAT_BLURBS[s]}"><span class="nm">${STAT_NAMES[s]}</span>
         <div class="pips">${Array.from({ length: MAX_STAT_LEVEL }, (_, i) => `<i class="pip ${i < lv ? 'on' : ''} ${[2, 5, 8].includes(i) ? 't' : ''}"></i>`).join('')}</div>
         <span class="val">${st[s]}</span>
-        ${cost === null ? '<span class="rec" style="text-align:center">MAX</span>' : `<button class="btn small" data-up="${s}" ${S.bio < cost ? 'disabled' : ''}>+ ${cost}</button>`}</div>`;
+        ${cost === null ? '<span class="rec" style="text-align:center">MAX</span>' : `<button class="btn small" data-up="${s}" ${bio < cost ? 'disabled' : ''}>+ ${cost}</button>`}</div>`;
     }).join('')}
     <h3>Abilities <span style="font-size:14px">(${k.abilities.length}/${MAX_EQUIPPED} equipped)</span></h3>
     <div class="card ab"><b>${basic.name}</b><span class="tag">Basic · always on</span><div class="desc">${describe(basic)}</div></div>
@@ -169,120 +241,195 @@ function lab() {
       const owned = k.unlocked.includes(a.id), eq = k.abilities.includes(a.id);
       const cls = a.frames ? 'ex' : a.universal ? 'un' : '';
       const action = !owned
-        ? `<button class="btn small" data-buy="${a.id}" ${S.bio < a.price ? 'disabled' : ''}>Unlock ${a.price}</button>`
+        ? `<button class="btn small" data-buy="${a.id}" ${bio < a.price ? 'disabled' : ''}>Unlock ${a.price}</button>`
         : `<button class="btn small ${eq ? '' : 'ghost'}" data-eq="${a.id}">${eq ? 'Equipped' : 'Equip'}</button>`;
       return `<div class="card ab ${eq ? 'sel' : ''}"><div><b>${a.name}</b> <span class="tag ${cls}">${abilityScope(a)}</span>
         <div class="meta">${a.cost ? a.cost + ' energy' : 'free'}${a.cd ? ' · ' + a.cd + ' turn cooldown' : ''}${a.vis ? ' · changes look' : ''}</div></div>${action}<div class="desc">${describe(a)}</div></div>`;
     }).join('') : '').join('')}
-    <h3>Colors</h3>
-    <div class="row">
+    <h3>Name & colors</h3>
+    <input type="text" id="kname" maxlength="24" value="${esc(k.name)}">
+    <div class="row" style="margin-top:8px">
       <label class="row rec">Body <input type="color" data-col="body" value="${k.colors.body}"></label>
       <label class="row rec">Belly <input type="color" data-col="belly" value="${k.colors.belly}"></label>
       <label class="row rec">Glow <input type="color" data-col="accent" value="${k.colors.accent}"></label>
+      <span class="grow"></span><button class="btn ghost small" id="savecos" hidden>Save</button>
     </div>
     <button class="btn big" data-go="arena" style="margin-top:18px">Fight</button>`;
-  panel.onclick = (e) => {
+  panel.onclick = async (e) => {
     const up = e.target.closest('[data-up]'), buy = e.target.closest('[data-buy]'), eq = e.target.closest('[data-eq]');
     if (up) {
-      const s = up.dataset.up, cost = statUpgradeCost(k.levels[s]);
-      if (cost !== null && S.bio >= cost) { S.bio -= cost; k.levels[s]++; store.save(); if ([3, 6, 9].includes(k.levels[s])) toast(`${k.name} is mutating`); }
+      const r = await act('upgrade', { kaiju_id: k.id, stat: up.dataset.up });
+      if (r && [3, 6, 9].includes(active().levels[up.dataset.up])) toast(`${k.name} is mutating`);
     }
-    if (buy) {
-      const a = ABILITY_BY_ID[buy.dataset.buy];
-      if (S.bio >= a.price && !k.unlocked.includes(a.id)) {
-        S.bio -= a.price; k.unlocked.push(a.id);
-        if (k.abilities.length < MAX_EQUIPPED) k.abilities.push(a.id);
-        store.save();
-      }
-    }
+    if (buy) await act('unlock', { kaiju_id: k.id, ability: buy.dataset.buy });
     if (eq) {
       const id = eq.dataset.eq;
-      if (k.abilities.includes(id)) k.abilities = k.abilities.filter(x => x !== id);
-      else if (k.abilities.length < MAX_EQUIPPED) k.abilities.push(id);
-      else return toast(`Max ${MAX_EQUIPPED} equipped: unequip one first`);
-      store.save();
+      let list = k.abilities.includes(id) ? k.abilities.filter(x => x !== id) : [...k.abilities, id];
+      if (list.length > MAX_EQUIPPED) return toast(`Max ${MAX_EQUIPPED} equipped: unequip one first`);
+      await act('equip', { kaiju_id: k.id, abilities: list });
     }
-    if (up || buy || eq) { const y = panel.scrollTop; updateBio(); lab(); panel.scrollTop = y; refreshShowcase(); }
+    if (e.target.id === 'savecos') await act('cosmetic', { kaiju_id: k.id, name: $('#kname').value, colors: k.colors });
   };
   panel.oninput = (e) => {
-    if (e.target.dataset.col) { k.colors[e.target.dataset.col] = e.target.value; store.save(); refreshShowcase(); }
+    if (e.target.dataset.col) { k.colors = { ...k.colors, [e.target.dataset.col]: e.target.value }; refreshShowcase(); }
+    if (e.target.dataset.col || e.target.id === 'kname') $('#savecos').hidden = false;
   };
 }
 
 // ---------- Arena ----------
-function rivals() {
-  const S = store.S(), k = store.active(), my = powerRating(k);
-  return [85, 100, 120].map((p, i) => {
-    const seed = hashString(`${S.rivalSeed}:${k.id}:${i}`);
-    const rv = generateRival(seed, Math.floor((my * p) / 100));
-    const env = createRng(seed ^ 0x5bd1e995).pick(Object.keys(ENV_BY_ID));
-    return { rv, env, label: ['Warm-up', 'Even match', 'Dangerous'][i] };
-  });
-}
-function arena() {
-  const k = store.active(), my = powerRating(k);
-  const list = rivals();
+async function arena() {
+  const k = active();
+  panel.innerHTML = `<h2>Arena</h2><p class="sub">Loading opponents…</p>`;
+  if (!offers || offers.kaijuId !== k.id) {
+    const r = await act('offers', { kaiju_id: k.id }, { rerender: false });
+    if (!r) return;
+    offers = { kaijuId: k.id, list: r.offers };
+  }
+  if (screen !== 'arena') return;
+  const my = powerRating(k), left = Math.max(0, me.player.ratedPerDay - me.player.fightsToday);
   panel.innerHTML = `
-    <h2>Arena</h2><p class="sub">${esc(k.name)} · Power ${my}. Fights are automatic. Win for more Biomass; tougher rivals pay more.</p>
-    ${list.map((r, i) => {
-      const e = ENV_BY_ID[r.env], rr = powerRating(r.rv);
+    <h2>Arena</h2><p class="sub">${esc(k.name)} · Elo <span class="elo">${k.elo}</span> · Power ${my}<br>
+    Fights run on the server and are automatic. ${left ? `${left} rated fights left today.` : '<b>Daily rated fights used up:</b> further fights pay no Biomass or Elo until tomorrow (UTC).'}</p>
+    ${offers.list.map((o, i) => {
+      const e = ENV_BY_ID[o.env], s = o.snapshot, rr = powerRating(s);
+      const tag = o.kind === 'player' ? `<span class="tag ex">Player</span>` : `<span class="tag">Wild</span>`;
       return `<div class="card">
-        <div class="row"><b class="grow">${esc(r.rv.name)}</b><span class="tag ${i === 2 ? 'ex' : i === 1 ? 'un' : ''}">${r.label}</span></div>
-        <div class="rec">${FRAME_BY_ID[r.rv.frame].name} · Power ${rr} · ${r.rv.abilities.map(a => ABILITY_BY_ID[a].name).join(', ')}</div>
+        <div class="row"><b class="grow">${esc(s.name)}</b>${tag}<span class="elo" style="margin-left:6px">${o.elo}</span></div>
+        <div class="rec">${FRAME_BY_ID[s.frame].name}${o.kind === 'player' ? ' · ' + esc(s.owner) + (o.record ? ` · ${o.record[0]}W ${o.record[1]}L` : '') : ''} · Power ${rr}</div>
+        <div class="rec">${s.abilities.map(a => ABILITY_BY_ID[a]?.name).filter(Boolean).join(', ') || 'Basic attack only'}</div>
         <div class="rec" style="margin:4px 0 8px">📍 ${e.name}: ${e.blurb}</div>
-        <div class="row"><span class="rec grow">Win ≈ ${battleReward('win', my, rr)} · Loss ${battleReward('loss', my, rr)} BIO</span><button class="btn small" data-fight="${i}">Fight</button></div>
+        <div class="row"><span class="rec grow">${left ? `Win ≈ ${battleReward('win', my, rr)} · Loss ${battleReward('loss', my, rr)} BIO` : 'Unrated'}</span><button class="btn small" data-fight="${i}">Fight</button></div>
       </div>`;
     }).join('')}
-    <button class="btn ghost small" id="reroll" style="margin-top:8px">New rivals (15 BIO)</button>
-    <h3>Challenge a friend</h3>
-    <p class="sub">Paste a Kaiju code (KJ1…) to fight it, or a replay code (KR1…) to watch a fight.</p>
+    <p class="rec" style="margin-top:6px">Wild Kaiju fill in when there aren't enough players near your Elo. They move your Elo at half rate.</p>
+    <button class="btn ghost small" id="reroll" ${me.player.bio < 15 ? 'disabled' : ''}>New opponents (15 BIO)</button>
+    <h3>Friendly sparring</h3>
+    <p class="sub">Paste a friend's Kaiju code (KJ1…) for an unrated match, or a replay code (KR1…) to watch.</p>
     <textarea id="code" placeholder="KJ1.… or KR1.…"></textarea>
     <div class="row" style="margin-top:6px">
-      <select id="envsel" class="grow" style="background:#0e1320;color:inherit;border:1px solid var(--line);border-radius:8px;padding:8px">${Object.values(ENV_BY_ID).map(e => `<option value="${e.id}">${e.name}</option>`).join('')}</select>
+      <select id="envsel" class="grow" style="background:#0e1320;color:inherit;border:1px solid var(--line);border-radius:8px;padding:8px">${ENVIRONMENTS.map(e => `<option value="${e.id}">${e.name}</option>`).join('')}</select>
       <button class="btn small" id="usecode">Go</button>
     </div>`;
-  panel.onclick = (e) => {
+  panel.onclick = async (e) => {
     const f = e.target.closest('[data-fight]');
-    if (f) { const r = list[+f.dataset.fight]; startFight(r.rv, r.env, { rated: true }); }
+    if (f) return rankedFight(+f.dataset.fight);
     if (e.target.id === 'reroll') {
-      const S = store.S(); if (S.bio < 15) return toast('Not enough Biomass');
-      S.bio -= 15; S.rivalSeed = randomSeed(); store.save(); updateBio(); arena();
+      panel.classList.add('busy');
+      try { const r = await api.call('offers', { kaiju_id: k.id, reroll: true }); me.player.bio = r.bio; offers = { kaijuId: k.id, list: r.offers }; updateTop(); arena(); }
+      catch (err) { toast(err.message); } finally { panel.classList.remove('busy'); }
     }
     if (e.target.id === 'usecode') {
       try {
-        const { kind, data } = store.parseCode($('#code').value);
-        if (kind === 'kaiju') startFight(data, $('#envsel').value, { rated: true, friend: true });
-        else watchReplay(data);
+        const { kind, data } = codes.parseCode($('#code').value);
+        if (kind === 'kaiju') spar(data, $('#envsel').value); else watchReplay(data);
       } catch (err) { toast(err.message || 'Bad code'); }
     }
   };
 }
 
-function startFight(opp, env, { rated, friend } = {}) {
-  const S = store.S(), k = store.active();
-  const record = simulateBattle({ seed: randomSeed(), env, a: { ...k, owner: 'You' }, b: opp });
-  // Rewards are settled now (before playback) so refreshing mid-fight can't reroll a loss.
-  let reward = 0, result = record.winner === 0 ? 'win' : record.winner === 1 ? 'loss' : 'draw';
-  if (rated) {
-    reward = battleReward(result, powerRating(k), powerRating(record.fighters[1]));
-    S.bio += reward;
-    k.record[result[0]]++;
-    if (!friend) S.rivalSeed = randomSeed();
-  }
-  store.addHistory(record, { kaijuId: k.id, result, reward, friend: !!friend });
-  store.save();
-  showBattle(record, { result, reward });
+async function rankedFight(slot) {
+  const r = await act('fight', { slot }, { rerender: false });
+  offers = null;
+  if (!r) { if (screen === 'arena') arena(); return; }
+  // The server sent no events. Re-simulate locally and confirm we got the exact same fight.
+  const { ok, stale, record } = verifyReplay(r.battle);
+  if (stale) toast(`Server is on engine v${r.battle.v}, this page is v${ENGINE_VERSION}. Reload to update.`);
+  showBattle(record, { result: r.result, reward: r.reward, elo: r.eloDelta, rated: r.rated, verified: ok, battleId: r.battle.id });
+}
+
+function spar(opp, env) {
+  const k = active();
+  const record = simulateBattle({ seed: randomSeed(), env, a: { ...k, owner: me.player.name }, b: opp });
+  const result = record.winner === 0 ? 'win' : record.winner === 1 ? 'loss' : 'draw';
+  showBattle(record, { result, friendly: true });
 }
 
 function watchReplay(data) {
-  const { ok, stale, record } = verifyReplay({ ...data, hash: data.hash });
+  const { ok, stale, record } = verifyReplay(data);
   if (stale) toast(`Replay is from engine v${data.v}; re-simulated on v${ENGINE_VERSION}, result may differ`);
   else if (!ok) toast('Warning: replay did not match its original hash');
-  showBattle(record, { replay: true });
+  showBattle(record, { replay: true, verified: ok });
+}
+function watchCode(code) {
+  try { const { kind, data } = codes.parseCode(code); if (kind !== 'replay') throw new Error('That is a Kaiju code, use it in the Arena'); watchReplay(data); }
+  catch (err) { toast(err.message); }
+}
+async function watchBattleId(id) {
+  try { const r = await api.call('battle', { id }); watchReplay(r.battle); }
+  catch (e) { toast(e.message); }
+}
+
+// ---------- Ladder ----------
+async function ladderScreen() {
+  panel.innerHTML = `<h2>Ladder</h2><p class="sub">Loading…</p>`;
+  try { ladder = (await api.call('leaderboard')).ladder; } catch (e) { toast(e.message); return; }
+  if (screen !== 'ladder') return;
+  const mine = new Set(me.kaiju.map(k => k.id));
+  panel.innerHTML = `<h2>Ladder</h2><p class="sub">Top Kaiju by Elo. You gain Elo by attacking in the Arena; your active Kaiju also defends while you're offline and earns ${25} BIO per defense win.</p>
+    ${ladder.length ? ladder.map((l, i) => `
+      <div class="lad ${mine.has(l.id) ? 'me' : ''}">
+        <span class="rk">${i + 1}</span>
+        <div><b>${esc(l.snapshot.name)}</b> <span class="rec">· ${esc(l.snapshot.owner || '')}</span>
+          <div class="rec">${FRAME_BY_ID[l.snapshot.frame].name} · Power ${l.power} · ${l.record[0]}W ${l.record[1]}L · Def ${l.defense[0]}–${l.defense[1]}</div></div>
+        <div style="text-align:right"><div class="elo">${l.elo}</div>${mine.has(l.id) ? '' : `<button class="linkbtn" data-spar="${i}">Spar</button>`}</div>
+      </div>`).join('') : '<p class="rec">Nobody on the ladder yet. Create a Kaiju and you are #1.</p>'}`;
+  panel.onclick = (e) => {
+    const s = e.target.closest('[data-spar]');
+    if (s && active()) { const l = ladder[+s.dataset.spar]; spar(l.snapshot, createRng(randomSeed()).pick(ENVIRONMENTS).id); }
+  };
+}
+
+// ---------- Replays ----------
+async function replays() {
+  panel.innerHTML = `<h2>Replays</h2><p class="sub">Loading…</p>`;
+  try { history = (await api.call('history')).history; } catch (e) { toast(e.message); return; }
+  if (screen !== 'replays') return;
+  panel.innerHTML = `
+    <h2>Replays</h2><p class="sub">Every fight is stored as a seed plus two Kaiju snapshots. Replaying re-runs the engine and checks it matches the server's result.</p>
+    ${history.length ? history.map((h, i) => {
+      const res = h.winner === null ? 'draw' : h.winner === h.side ? 'win' : 'loss';
+      const reward = h.side === 0 ? h.reward : h.defense_reward, delta = h.side === 0 ? h.elo_delta_a : h.elo_delta_d;
+      return `<div class="card click" data-rep="${i}">
+        <div class="row"><b class="grow">${esc(h.fighters[0].name)} vs ${esc(h.fighters[1].name)}</b>
+          <span class="${res === 'win' ? 'w' : res === 'loss' ? 'l' : 'rec'}">${res.toUpperCase()}</span></div>
+        <div class="rec">${h.side === 0 ? 'Attack' : 'Defense'} · ${ENV_BY_ID[h.env]?.name || h.env} · ${new Date(h.created_at).toLocaleString()}${reward ? ' · +' + reward + ' BIO' : ''}${delta ? ` · <span class="${delta > 0 ? 'delta-up' : 'delta-dn'}">${delta > 0 ? '+' : ''}${delta} Elo</span>` : ''}${h.rated ? '' : ' · unrated'}</div>
+      </div>`;
+    }).join('') : '<p class="rec">No fights yet.</p>'}
+    <h3>Watch a replay code</h3>
+    <textarea id="rcode" placeholder="KR1.…"></textarea>
+    <button class="btn small" id="watch" style="margin-top:6px">Watch</button>`;
+  panel.onclick = (e) => {
+    const r = e.target.closest('[data-rep]');
+    if (r) watchBattleId(history[+r.dataset.rep].id);
+    if (e.target.id === 'watch') watchCode($('#rcode').value);
+  };
+}
+
+// ---------- Defense report ----------
+function defenseReport() {
+  const d = me?.defenses || [];
+  if (!d.length) return;
+  me.defenses = [];
+  const total = d.reduce((s, x) => s + (x.defense_reward || 0), 0);
+  modal.innerHTML = `<div class="dialog" style="text-align:left">
+    <h2>While you were away</h2><p class="sub">${d.length} attack${d.length > 1 ? 's' : ''} on your Kaiju${total ? ` · <b style="color:var(--gold)">+${total} BIO</b> from defense wins` : ''}</p>
+    ${d.map(x => {
+      const held = x.winner === 1;
+      return `<div class="card click" data-def="${x.id}"><div class="row"><b class="grow">${esc(x.fighters[0].name)} <span class="rec">(${esc(x.fighters[0].owner || '')})</span> attacked ${esc(x.fighters[1].name)}</b>
+        <span class="${held ? 'w' : x.winner === 0 ? 'l' : 'rec'}">${held ? 'HELD' : x.winner === 0 ? 'FELL' : 'DRAW'}</span></div>
+        <div class="rec">${ENV_BY_ID[x.env]?.name || x.env}${x.elo_delta_d ? ` · ${x.elo_delta_d > 0 ? '+' : ''}${x.elo_delta_d} Elo` : ''} · tap to watch</div></div>`;
+    }).join('')}
+    <button class="btn big" id="dclose" style="margin-top:12px">OK</button></div>`;
+  modal.hidden = false;
+  modal.onclick = (e) => {
+    const c = e.target.closest('[data-def]');
+    if (c) { modal.hidden = true; watchBattleId(c.dataset.def); }
+    if (e.target.id === 'dclose') modal.hidden = true;
+  };
 }
 
 // ---------- Battle playback ----------
-function showBattle(record, { result, reward, replay } = {}) {
+function showBattle(record, { result, reward, elo, rated, replay, friendly, verified, battleId } = {}) {
   if (playing) { playing.stop(); playing = null; }
   panel.hidden = true; hud.hidden = false; modal.hidden = true;
   const env = ENV_BY_ID[record.env];
@@ -313,7 +460,7 @@ function showBattle(record, { result, reward, replay } = {}) {
     $('.hp > i', fx[i]).style.width = p + '%'; $('.hp > u', fx[i]).style.width = p + '%';
     $('.hp > span', fx[i]).textContent = `${Math.max(0, hp[i])} / ${record.meta[i].maxHp}`;
     $('.en > i', fx[i]).style.width = en[i] + '%';
-    $('.sts', fx[i]).innerHTML = [...sts[i].keys()].map(s => `<span class="st ${['burn', 'poison', 'bleed', 'stun', 'bind', 'slow', 'blind', 'weaken', 'sunder'].includes(s) ? 'neg' : 'pos'}">${STATUSES[s].name}</span>`).join('');
+    $('.sts', fx[i]).innerHTML = [...sts[i].keys()].map(s => `<span class="st ${NEG.has(s) ? 'neg' : 'pos'}">${STATUSES[s].name}</span>`).join('');
   };
   draw(0); draw(1);
   const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; $('#log').prepend(d); };
@@ -333,25 +480,26 @@ function showBattle(record, { result, reward, replay } = {}) {
       case 'skip': log(`${name(ev.a)} is ${ev.reason === 'stun' ? 'stunned' : 'held fast'} and can't act`); break;
       case 'hazard': callout(ev.name, '#ffb347'); for (const h of ev.hits) { hp[h.tg] = h.hp; draw(h.tg); log(`<b style="color:#ffb347">${esc(ev.name)}</b> hits ${name(h.tg)} for ${h.dmg}`); } break;
       case 'ko': callout('K.O.!', '#ff3a2a'); log(`<b>${name(ev.tg)} is down!</b>`); break;
-      case 'end': break;
     }
   };
   const onDone = () => {
     setTimeout(() => {
       const w = record.winner;
       const big = replay ? (w === null ? 'DRAW' : `${record.fighters[w].name} WINS`) : ({ win: 'VICTORY', loss: 'DEFEAT', draw: 'DRAW' })[result];
+      const sub = friendly ? 'Friendly · unrated' : replay ? 'Replay' : rated === false ? 'Unrated (daily limit reached)' : 'Ranked';
       modal.innerHTML = `<div class="dialog">
         <div class="big" style="color:${result === 'loss' ? 'var(--bad)' : result === 'win' ? 'var(--good)' : '#fff'}">${esc(big)}</div>
-        <div class="rec">${record.reason === 'ko' ? 'Knockout' : record.reason === 'decision' ? 'Time: decision on remaining HP' : 'Double knockout'} · ${record.turns} actions · seed ${record.seed}</div>
-        ${reward ? `<div class="reward">+${reward} Biomass</div>` : '<div style="height:18px"></div>'}
+        <div class="rec">${sub} · ${record.reason === 'ko' ? 'Knockout' : record.reason === 'decision' ? 'Time: decision on remaining HP' : 'Double knockout'} · ${record.turns} actions</div>
+        ${verified !== undefined ? `<div class="${verified ? 'verified' : 'l'}" style="font-size:11px;margin-top:4px">${verified ? '✓ Re-simulated locally: identical to the server result' : '⚠ Local re-simulation did not match'}</div>` : ''}
+        ${reward || elo ? `<div class="reward">${reward ? `+${reward} Biomass` : ''}${elo ? ` <span class="${elo > 0 ? 'delta-up' : 'delta-dn'}" style="font-size:22px">${elo > 0 ? '+' : ''}${elo} Elo</span>` : ''}</div>` : '<div style="height:18px"></div>'}
         <div class="row"><button class="btn ghost grow" id="rewatch">Replay</button><button class="btn ghost grow" id="share">Copy replay code</button></div>
-        <div class="row" style="margin-top:8px">${replay ? '<button class="btn grow" data-go="replays">Back</button>' : '<button class="btn ghost grow" data-go="lab">Upgrade</button><button class="btn grow" data-go="arena">Next fight</button>'}</div>
+        <div class="row" style="margin-top:8px">${replay || !me?.player ? `<button class="btn grow" data-go="${me?.player ? 'replays' : 'auth'}">Back</button>` : '<button class="btn ghost grow" data-go="lab">Upgrade</button><button class="btn grow" data-go="arena">Next fight</button>'}</div>
       </div>`;
       modal.hidden = false;
       modal.onclick = (e) => {
         if (e.target.closest('[data-go]')) modal.hidden = true;
-        if (e.target.id === 'rewatch') showBattle(verifyReplay(record).record, { result, reward: 0, replay });
-        if (e.target.id === 'share') navigator.clipboard?.writeText(store.replayCode(record)).then(() => toast('Replay code copied'));
+        if (e.target.id === 'rewatch') showBattle(verifyReplay(record).record, { result, replay: replay || !friendly, friendly, verified });
+        if (e.target.id === 'share') navigator.clipboard?.writeText(codes.replayCode(record)).then(() => toast('Replay code copied'));
       };
     }, 900);
   };
@@ -371,7 +519,6 @@ function showBattle(record, { result, reward, replay } = {}) {
   };
 }
 
-// Fallback when WebGL/renderer is unavailable: step through events on a timer.
 function textPlayback(record, onEvent, onDone) {
   let i = 0, speed = 1, timer = null, stopped = false;
   const step = () => {
@@ -388,29 +535,18 @@ function textPlayback(record, onEvent, onDone) {
   };
 }
 
-// ---------- Replays ----------
-function replays() {
-  const H = store.S().history;
-  panel.innerHTML = `
-    <h2>Replays</h2><p class="sub">Every fight is stored as a seed and two Kaiju snapshots. Re-running it gives the exact same battle.</p>
-    ${H.length ? H.map((h, i) => `
-      <div class="card click" data-rep="${i}">
-        <div class="row"><b class="grow">${esc(h.fighters[0].name)} vs ${esc(h.fighters[1].name)}</b>
-          <span class="${h.result === 'win' ? 'w' : h.result === 'loss' ? 'l' : 'rec'}">${(h.result || '').toUpperCase()}</span></div>
-        <div class="rec">${ENV_BY_ID[h.env]?.name || h.env} · ${new Date(h.at).toLocaleString()}${h.reward ? ' · +' + h.reward + ' BIO' : ''}</div>
-      </div>`).join('') : '<p class="rec">No fights yet.</p>'}
-    <h3>Watch a replay code</h3>
-    <textarea id="rcode" placeholder="KR1.…"></textarea>
-    <button class="btn small" id="watch" style="margin-top:6px">Watch</button>`;
-  panel.onclick = (e) => {
-    const r = e.target.closest('[data-rep]');
-    if (r) watchReplay(H[+r.dataset.rep]);
-    if (e.target.id === 'watch') {
-      try { const { kind, data } = store.parseCode($('#rcode').value); if (kind !== 'replay') throw new Error('That is a Kaiju code, use it in the Arena'); watchReplay(data); }
-      catch (err) { toast(err.message); }
-    }
-  };
+// ---------- Boot ----------
+async function boot() {
+  const s = await api.session();
+  if (!s) { me = null; go('auth'); return; }
+  panel.innerHTML = '<p class="sub">Loading your Kaiju…</p>';
+  try { applyBoot(await api.call('me')); }
+  catch (e) { toast(e.message); if (e.status === 401) { await api.signOut(); me = null; } go('auth'); return; }
+  go(me.needsName ? 'name' : active() ? 'hangar' : 'creator');
+  defenseReport();
 }
 
-go(store.active() ? 'hangar' : 'creator');
+api.sb.auth.onAuthStateChange((evt) => { if (evt === 'PASSWORD_RECOVERY') { authMode = 'recover'; me = null; go('auth'); } });
 initStage();
+const sharedBattle = new URLSearchParams(location.search).get('battle');
+boot().then(() => { if (sharedBattle) watchBattleId(sharedBattle); });

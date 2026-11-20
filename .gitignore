@@ -1,2 +1,4 @@
 node_modules/
 .DS_Store
+supabase/functions/_shared/kaiju/
+supabase/.temp/

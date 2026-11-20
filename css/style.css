@@ -135,3 +135,22 @@ input[type=color] { width: 38px; height: 30px; border: 1px solid var(--line); ba
   .envtag small { display: none; }
   .callout { top: 150px; font-size: 30px; }
 }
+
+/* ---------- Online ---------- */
+.acct { background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.acct:hover { color: var(--text); }
+#panel.busy { pointer-events: none; }
+#panel.busy::after { content: ''; position: fixed; top: 56px; left: 0; width: min(460px, 100vw); height: 3px; background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 50% 100%; animation: busy 0.9s linear infinite; }
+@keyframes busy { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+.auth { max-width: 380px; }
+.auth label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
+.auth input[type=email], .auth input[type=password] { width: 100%; background: rgba(0,0,0,.35); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 10px; font: inherit; }
+.linkbtn { background: none; border: 0; color: var(--accent2); padding: 0; font-size: 12px; }
+.err { color: var(--bad); font-size: 12px; min-height: 16px; margin-top: 8px; }
+.lad { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.lad .rk { font: 20px/1 'Bebas Neue', sans-serif; color: var(--muted); text-align: center; }
+.lad.me { background: rgba(255,90,42,.08); }
+.elo { font: 18px/1 'Bebas Neue', sans-serif; letter-spacing: .5px; color: var(--gold); }
+.delta-up { color: var(--good); } .delta-dn { color: var(--bad); }
+.verified { font-size: 11px; color: var(--good); }
+@media (max-width: 700px) { .acct { display: none; } }

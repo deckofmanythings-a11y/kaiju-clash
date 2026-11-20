@@ -3,9 +3,9 @@
 Players build a Kaiju on one of 12 **frames**, spend **Biomass (BIO)** to level its stats and unlock abilities, and send it into automated battles against other players' Kaiju across 6 environments. Fights take no input. They're random but **deterministic**: a fight is fully described by `(engine version, seed, environment, both Kaiju snapshots)`, so any battle can be replayed with the exact same result.
 
 ## Stack
-- Static site, ES modules, no build step. Three.js `0.170.0` via importmap from jsdelivr.
-- Phase 1 (this build): runs locally. Player Kaiju saved in `localStorage`. Opponents come from a deterministic rival generator (seeded) **plus** import/export of Kaiju codes (base64 JSON) so you can fight a friend's Kaiju. Replay codes are shareable too.
-- Phase 2 (planned): Supabase (raided-hex project, `kb_` tables) for a real async ladder. The battle engine is pure JS with no DOM, so the same file runs in a Supabase Edge Function (Deno) to make results and BIO payouts server-authoritative.
+- Static site, ES modules, no build step. Three.js `0.170.0` via importmap from jsdelivr; supabase-js `2.45.4` (ESM) for auth.
+- **Online ladder (live):** Supabase project raided-hex (`uaoxvhihwiygrajicend`), `kb_` tables, email/password Supabase Auth. See "Online ladder" below.
+- Friendly sparring (KJ1 Kaiju codes) and replay codes (KR1) still run fully client-side and are unrated.
 
 ## Layout
 ```
@@ -21,7 +21,12 @@ js/render/stage.js      Three.js stage (renderer, camera, lights, env)
 js/render/kaiju-model.js procedural Kaiju model from a snapshot
 js/render/arena.js      environment scenery + hazard visuals
 js/render/playback.js   plays a BattleRecord as 3D animation
-js/app/*.js             UI: creator, upgrade lab, battle screen, storage, rivals
+js/app/main.js          UI: auth, hangar, creator, lab, arena, ladder, replays, battle HUD
+js/app/api.js           supabase-js auth + kaiju-api calls
+js/app/codes.js         KJ1 / KR1 share codes
+supabase/migrations/    kb_ schema + kb_spend / kb_settle RPCs
+supabase/functions/kaiju-api/  the whole backend (one function, action-dispatched)
+scripts/sync-engine.mjs copies js/engine + js/data into the function (gitignored copy)
 test/determinism.mjs    node test: same inputs => identical hash, many seeds
 ```
 
@@ -100,3 +105,23 @@ buildKaijuModel(snapshot) -> THREE.Group  // userData.rig = { root, body, head, 
 playBattle(stage, record, { speed=1, onEvent(ev, index), onDone() }) -> { pause(), resume(), setSpeed(x), skipToEnd(), stop() }
 ```
 `playBattle` animates each event in order (lunges, beams, projectiles, AoE rings, grabs, roars, shield bubbles, heal glow, hit flash/knockback, damage numbers, status tints, hazards, KO collapse) and calls `onEvent` at the moment each event's visual lands so the UI can update HP/energy bars and the log.
+
+## Online ladder
+Server-authoritative. Clients never touch the tables (RLS on, zero policies, privileges revoked from anon/authenticated); everything goes through the `kaiju-api` Edge Function using the service role.
+
+- **Identity:** Supabase Auth JWT -> `kb_players` row (display name, BIO, active Kaiju, daily fight counter).
+- **Spending:** `kb_spend` RPC deducts BIO and writes the Kaiju in one transaction, guarded by `kb_kaiju.version` (optimistic concurrency), so parallel requests can't double-spend.
+- **Matchmaking:** the server stores 3 offers per player in `kb_offers` (opponent + environment). Real opponents are other players' active Kaiju near your Elo (window widens 150 -> 350 -> 800 -> any); empty slots fill with seeded wild rivals. A fight must consume an offer, so clients can't pick opponents or environments. Rerolling costs 15 BIO.
+- **Fights:** the server picks the seed, runs `simulateBattle` (same file as the browser), and settles atomically in `kb_settle` (consumes the offer, inserts `kb_battles`, pays BIO, moves both Elos). The response carries no events: the client re-simulates from `(v, seed, env, fighters)` and shows a ✓ when the hash matches.
+- **Elo:** K=32 vs players, K=16 vs wild rivals (attacker only). Defenders' Elo moves the opposite way, and they get 25 BIO for each defense win plus a "while you were away" report on next login.
+- **Limits:** 40 rated fights per UTC day; after that fights are unrated (no BIO, no Elo). Max 6 Kaiju per player.
+- **Public actions:** `leaderboard` and `battle` (fetch any fight for replay, also via `?battle=<id>` links). Everything else requires a JWT.
+
+### Deploy
+```bash
+node scripts/sync-engine.mjs           # REQUIRED: server must run the same engine as the client
+supabase functions deploy kaiju-api --project-ref uaoxvhihwiygrajicend --no-verify-jwt --use-api
+```
+`--no-verify-jwt` is deliberate (public actions); the function verifies JWTs itself. Migrations are applied with `supabase db query --linked -f`, then recorded in `supabase_migrations.schema_migrations` by hand (`db push` is unsafe on this shared project).
+
+**Changing engine/data:** bump `ENGINE_VERSION`, sync, and deploy the function at the same time as the client. Stored battles keep their `engine_v`; replays from older versions are flagged as possibly different.
