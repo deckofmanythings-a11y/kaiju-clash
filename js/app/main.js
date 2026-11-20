@@ -9,7 +9,7 @@ import * as codes from './codes.js';
 import * as api from './api.js';
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 
 document.getElementById('ver').textContent = `Ver. ${APP_VERSION} · engine v${ENGINE_VERSION}`;
 
@@ -205,7 +205,7 @@ function hangar() {
     <div class="row" style="margin-top:6px"><button class="btn ghost small" id="copycode">Copy code</button><span class="grow"></span>
     ${me.kaiju.length > 1 ? `<button class="btn ghost small" id="release">Release ${esc(k.name)}</button>` : ''}</div>
     <h3>Trophies</h3>
-    <div class="trophies">${WILD_FRAMES.map(w => { const n = me.trophies[w.id] || 0; return `<div class="trophy ${n ? 'got' : ''}" title="${esc(w.blurb)}"><b>${n ? '×' + n : '?'}</b><span>${n ? w.name : 'Undiscovered'}</span></div>`; }).join('')}</div>
+    <div class="trophies">${WILD_FRAMES.map(w => { const n = me.trophies[w.id] || 0; return `<div class="trophy ${n ? 'got' : ''}" title="${n ? esc(w.blurb) : 'Undiscovered. Defeat this rare Wild encounter to reveal it.'}"><b>${n ? '×' + n : '?'}</b><span>${n ? w.name : 'Undiscovered'}</span></div>`; }).join('')}</div>
     <p class="rec" style="margin-top:4px">Rare Wild encounters: defenders of humanity who sometimes appear in the Arena. Beat one for double Biomass and a trophy.</p>
     ${me.fallen.length ? '<h3>Hall of the Fallen</h3>' + me.fallen.map((f, i) => `
       <div class="card click fallen" data-fallen="${i}">
