@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wild Enemies Test</title>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+</script>
+<style>
+  :root { --bg: #0e1118; --panel: #161b26; --line: #2a3142; --text: #d8deea; --dim: #8a94a8; --acc: #ffd23f; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.35 system-ui, Segoe UI, sans-serif; }
+  #wrap { display: flex; height: 100%; }
+  #panel { width: 270px; flex: none; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px 12px; }
+  #view { position: relative; flex: 1; min-width: 0; }
+  #stage { width: 100%; height: 100%; display: block; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 14px 0 6px; }
+  select, button { background: #222a3a; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; font: inherit; }
+  select { width: 100%; }
+  button { cursor: pointer; margin: 2px 2px 2px 0; }
+  button:hover { border-color: var(--acc); }
+  label { display: block; margin: 3px 0; }
+  #hud { position: absolute; left: 12px; right: 12px; top: 10px; display: flex; justify-content: space-between; pointer-events: none; }
+  .hp { width: 38%; }
+  .hp .bar { height: 10px; background: #300; border: 1px solid #000; border-radius: 3px; overflow: hidden; }
+  .hp .fill { height: 100%; background: linear-gradient(#7f7, #2a2); width: 100%; transition: width .25s; }
+  .hp .name { font-weight: 700; text-shadow: 0 1px 2px #000; }
+  #log { position: absolute; right: 12px; bottom: 10px; width: 330px; max-height: 38%; overflow-y: auto; background: rgba(10,12,18,.72); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 11px/1.3 ui-monospace, Consolas, monospace; }
+  #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #err { color: #ff8a8a; white-space: pre-wrap; font: 11px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="panel">
+    <h2>Showcase</h2>
+    <div id="showBtns"></div>
+    <label>Stat levels <select id="lv"><option value="0">0 (tier 0)</option><option value="3">3 (tier 1)</option><option value="6">6 (tier 2)</option><option value="9">9 (tier 3)</option></select></label>
+    <button id="btnGallery">Gallery (4 + saurian)</button>
+    <h2>Environment</h2>
+    <select id="env"></select>
+    <h2>Fake battle vs Saurian</h2>
+    <div id="fightBtns"></div>
+    <label><input type="checkbox" id="wildA"> Wild on the left (A)</label>
+    <button id="btnPause">Pause</button>
+    <button id="btnSkip">Skip to end</button>
+    <button id="btnStop">Stop</button>
+    <label>Speed <select id="speed"><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></label>
+    <div id="err"></div>
+  </div>
+  <div id="view">
+    <canvas id="stage"></canvas>
+    <div id="hud">
+      <div class="hp"><div class="name" id="nA">A</div><div class="bar"><div class="fill" id="hA"></div></div></div>
+      <div class="hp" style="text-align:right"><div class="name" id="nB">B</div><div class="bar"><div class="fill" id="hB" style="margin-left:auto"></div></div></div>
+    </div>
+    <div id="log"></div>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { createStage } from './stage.js';
+import { buildKaijuModel, disposeObject } from './kaiju-model.js';
+import { FRAME_BY_ID, WILD_FRAMES, STATS } from '../data/frames.js';
+import { ABILITY_BY_ID } from '../data/abilities.js';
+import { ENVIRONMENTS } from '../data/environments.js';
+
+const $ = (s) => document.querySelector(s);
+const errBox = $('#err');
+window.__errors = [];
+window.addEventListener('error', e => { window.__errors.push(String(e.message || e)); errBox.textContent += (e.message || e) + '\n'; });
+window.addEventListener('unhandledrejection', e => { window.__errors.push('Promise: ' + (e.reason?.message || e.reason)); errBox.textContent += 'Promise: ' + (e.reason?.message || e.reason) + '\n'; });
+
+const stage = createStage($('#stage'));
+// same as the app: plug the wild plans in after the stage loads (?v= only defeats the dev server's caching)
+const bust = '?v=' + Date.now();
+await import('./wild-models.js' + bust);
+const { playBattle } = await import('./playback.js' + bust);
+
+let playing = null, gallery = [], galleryTicker = null, mode = 'show', current = 'superhero';
+const lvl = () => +$('#lv').value;
+const snap = (frame, lv = lvl(), side = 'W') => {
+  const f = FRAME_BY_ID[frame];
+  return { id: side + '-' + f.id, name: f.name, frame: f.id, levels: Object.fromEntries(STATS.map(s => [s, lv])), abilities: f.exclusive.slice(0, 3), colors: { ...f.colors } };
+};
+
+$('#env').insertAdjacentHTML('beforeend', `<option value="studio">Studio</option>`);
+for (const e of ENVIRONMENTS) $('#env').insertAdjacentHTML('beforeend', `<option value="${e.id}">${e.name}</option>`);
+$('#env').onchange = () => stage.setEnvironment($('#env').value);
+for (const f of WILD_FRAMES) {
+  $('#showBtns').insertAdjacentHTML('beforeend', `<button data-show="${f.id}">${f.name}</button>`);
+  $('#fightBtns').insertAdjacentHTML('beforeend', `<button data-fight="${f.id}">${f.name}</button>`);
+}
+$('#showBtns').onclick = (e) => { const id = e.target.dataset.show; if (id) showcase(id); };
+$('#fightBtns').onclick = (e) => { const id = e.target.dataset.fight; if (id) fight(id); };
+$('#lv').onchange = () => { if (mode === 'show') showcase(current); else if (mode === 'gallery') showGallery(); };
+
+function stopPlaying() { if (playing) { playing.stop(); playing = null; } }
+function clearGallery() { for (const m of gallery) disposeObject(m); gallery = []; if (galleryTicker) { galleryTicker(); galleryTicker = null; } }
+function showcase(id) { stopPlaying(); clearGallery(); mode = 'show'; current = id; stage.showcase(snap(id)); }
+function showGallery() {
+  stopPlaying(); clearGallery(); mode = 'gallery';
+  stage.setFighters({ frame: 'saurian' }, { frame: 'saurian' });
+  for (const f of stage.fighters) f.visible = false;
+  const y = stage.arena ? stage.arena.showcaseY : 0;
+  const ids = [...WILD_FRAMES.map(f => f.id), 'saurian'];
+  ids.forEach((id, i) => {
+    const m = buildKaijuModel(snap(id));
+    m.position.set((i - 2) * 24, y, 0);
+    m.rotation.y = 0.6;
+    stage.scene.add(m); gallery.push(m);
+  });
+  galleryTicker = stage.addTicker((dt, t) => { for (const m of gallery) m.userData.rig.update(dt, t); });
+  stage.director.free(new THREE.Vector3(10, 34, 110), new THREE.Vector3(0, 6, 0));
+}
+$('#btnGallery').onclick = showGallery;
+
+// ---- fake battles: each wild's basic + exclusives (all their fx kinds) + its passive
+function makeRecord(wildId, wildIdx) {
+  const W = wildIdx, S = 1 - wildIdx;
+  const maxHp = [3000, 3000], hp = [3000, 3000];
+  const ev = [];
+  const push = (e) => { ev.push(e); return e; };
+  const hit = (a, dmg, o = {}) => { const tg = 1 - a; hp[tg] = Math.max(0, hp[tg] - dmg); return push({ t: 'hit', a, tg, dmg, crit: !!o.crit, type: o.type || 'physical', hp: hp[tg], absorbed: o.absorbed || 0, hitNo: o.hitNo || 1, hits: o.hits || 1 }); };
+  const miss = (a, o = {}) => push({ t: 'miss', a, tg: 1 - a, hitNo: o.hitNo || 1, hits: o.hits || 1 });
+  const use = (a, ab) => push({ t: 'use', a, tg: 1 - a, ab, fx: ABILITY_BY_ID[ab]?.fx || 'melee', name: ABILITY_BY_ID[ab]?.name || ab });
+  const status = (tg, st, turns = 2) => push({ t: 'status', tg, st, turns });
+  const passive = (tg, id, extra = {}) => push({ t: 'passive', tg, id, name: { last_stand: 'Heroic Resolve', tag_team: 'Tag Team', swarm: 'Overwhelming Numbers', transformation: 'Transformation' }[id] || id, ...extra });
+  const multi = (a, n, dmg, o = {}) => { for (let k = 1; k <= n; k++) (o.missAt === k ? miss(a, { hitNo: k, hits: n }) : hit(a, dmg, { ...o, crit: o.critAt === k, hitNo: k, hits: n })); };
+  let n = 0;
+  const turn = (a) => push({ t: 'turn', n: ++n, a, en: 50 });
+  push({ t: 'start' });
+  if (wildId === 'superhero') {
+    turn(W); use(W, 'hero_punch'); hit(W, 120);
+    turn(S); use(S, 'claw'); hit(S, 140);
+    turn(W); use(W, 'heat_vision'); hit(W, 260, { type: 'fire' }); status(S, 'burn');
+    turn(S); use(S, 'atomic_breath'); hit(S, 900, { crit: true, type: 'fire' });
+    turn(W); use(W, 'hurricane_spin'); multi(W, 4, 70, { missAt: 3 }); status(S, 'blind');
+    turn(S); use(S, 'rampage'); hit(S, hp[W] - 1, { crit: true }); passive(W, 'last_stand'); status(W, 'enrage', 2);
+    turn(W); use(W, 'heroic_charge'); hit(W, 380, { crit: true }); status(S, 'stun', 1);
+    turn(S); push({ t: 'skip', a: S, reason: 'stun' }); push({ t: 'expire', tg: S, st: 'stun' });
+    turn(W); use(W, 'hero_punch'); hit(W, hp[S]);
+    push({ t: 'ko', tg: S }); push({ t: 'end', winner: W, reason: 'ko' });
+  } else if (wildId === 'heroteam') {
+    turn(W); use(W, 'team_strike'); multi(W, 2, 70);
+    turn(S); use(S, 'claw'); hit(S, 160);
+    turn(W); use(W, 'combo_formation'); multi(W, 5, 60, { missAt: 4, critAt: 5 });
+    turn(S); use(S, 'atomic_breath'); hit(S, 1400, { type: 'fire' }); status(W, 'burn');
+    passive(W, 'tag_team'); push({ t: 'expire', tg: W, st: 'burn' }); push({ t: 'heal', tg: W, amt: 900, hp: (hp[W] += 900) });
+    turn(W); use(W, 'shield_wall'); status(W, 'shield', 3); status(W, 'fortify', 2);
+    turn(S); use(S, 'stomp'); hit(S, 0, { absorbed: 200 });
+    turn(W); use(W, 'combined_beam'); hit(W, 520, { type: 'electric' });
+    turn(S); use(S, 'radiant_pulse'); hit(S, 600, { type: 'fire' }); push({ t: 'expire', tg: W, st: 'shield' });
+    turn(W); use(W, 'team_strike'); multi(W, 2, 60, { missAt: 2 });
+    turn(S); use(S, 'atomic_breath'); hit(S, hp[W], { crit: true, type: 'fire' });
+    push({ t: 'ko', tg: W }); push({ t: 'end', winner: S, reason: 'ko' });
+  } else if (wildId === 'army') {
+    turn(W); use(W, 'rifle_volley'); multi(W, 3, 40, { missAt: 2 });
+    turn(S); use(S, 'claw'); hit(S, 150);
+    turn(W); use(W, 'artillery_barrage'); multi(W, 5, 55, { missAt: 3, type: 'fire' }); status(S, 'burn');
+    turn(S); use(S, 'stomp'); hit(S, 220); passive(W, 'swarm', { resisted: 'stun' });
+    turn(W); use(W, 'air_strike'); hit(W, 420, { crit: true, type: 'fire' }); status(S, 'sunder');
+    turn(S); use(S, 'ram'); hit(S, 300); passive(W, 'swarm', { resisted: 'stun' });
+    turn(W); use(W, 'tank_column'); hit(W, 300); status(S, 'slow');
+    turn(S); use(S, 'atomic_breath'); hit(S, 800, { crit: true, type: 'fire' });
+    turn(W); use(W, 'rifle_volley'); multi(W, 3, 40);
+    turn(S); use(S, 'radiant_pulse'); hit(S, hp[W], { type: 'fire' });
+    push({ t: 'ko', tg: W }); push({ t: 'end', winner: S, reason: 'ko' });
+  } else {
+    turn(W); use(W, 'wand_bolt'); hit(W, 150, { type: 'electric' });
+    turn(S); use(S, 'claw'); hit(S, 200);
+    turn(W); use(W, 'ribbon_bind'); status(S, 'bind', 2); status(S, 'weaken', 2);
+    turn(S); push({ t: 'skip', a: S, reason: 'bind' });
+    turn(W); use(W, 'heart_barrier'); status(W, 'shield', 3); status(W, 'regen', 3);
+    turn(S); use(S, 'atomic_breath'); hit(S, 1500, { crit: true, type: 'fire', absorbed: 120 }); push({ t: 'expire', tg: W, st: 'shield' });
+    passive(W, 'transformation'); push({ t: 'expire', tg: S, st: 'weaken' }); status(W, 'shield', 3); status(W, 'charged', 3);
+    turn(W); use(W, 'starlight_beam'); hit(W, 700, { crit: true, type: 'electric' });
+    push({ t: 'expire', tg: S, st: 'bind' });
+    turn(S); use(S, 'radiant_pulse'); hit(S, 0, { absorbed: 260 });
+    turn(W); use(W, 'wand_bolt'); hit(W, hp[S], { type: 'electric' });
+    push({ t: 'passive', tg: W, id: 'mystery_aura', name: 'Unknown Passive' });
+    push({ t: 'ko', tg: S }); push({ t: 'end', winner: W, reason: 'ko' });
+  }
+  const fighters = [];
+  fighters[W] = snap(wildId, lvl(), 'W');
+  fighters[S] = { ...snap('saurian', 4, 'S') };
+  return { v: 'test', seed: 1, env: $('#env').value === 'studio' ? 'city' : $('#env').value, fighters, meta: [{ maxHp: maxHp[0], stats: {} }, { maxHp: maxHp[1], stats: {} }], events: ev, winner: null, reason: 'ko', turns: n, hash: 0 };
+}
+
+function setHp(k, hp, max) { $(k ? '#hB' : '#hA').style.width = Math.max(0, 100 * hp / max) + '%'; }
+function log(s) { const d = document.createElement('div'); d.textContent = s; $('#log').prepend(d); }
+function fight(wildId) {
+  stopPlaying(); clearGallery(); mode = 'battle'; current = wildId;
+  const wi = $('#wildA').checked ? 0 : 1;
+  const rec = makeRecord(wildId, wi);
+  window.__lastRecord = rec;
+  $('#env').value = rec.env;
+  stage.setEnvironment(rec.env);
+  stage.setFighters(rec.fighters[0], rec.fighters[1]);
+  $('#nA').textContent = rec.fighters[0].name; $('#nB').textContent = rec.fighters[1].name;
+  setHp(0, 1, 1); setHp(1, 1, 1);
+  $('#log').innerHTML = '';
+  window.__events = []; window.__done = false;
+  playing = playBattle(stage, rec, {
+    speed: +$('#speed').value,
+    onEvent(ev, i) {
+      window.__events.push(i);
+      if ('hp' in ev && ev.tg != null) setHp(ev.tg, ev.hp, rec.meta[ev.tg].maxHp);
+      log(`${i}: ${ev.t} ${ev.name || ev.id || ev.st || ev.reason || ''} ${ev.dmg ?? ev.amt ?? ''}${ev.crit ? ' CRIT' : ''}`);
+    },
+    onDone() { log('-- done --'); window.__done = true; },
+  });
+  window.__playing = playing;
+}
+$('#btnPause').onclick = () => { if (!playing) return; if (playing.paused) { playing.resume(); $('#btnPause').textContent = 'Pause'; } else { playing.pause(); $('#btnPause').textContent = 'Resume'; } };
+$('#btnSkip').onclick = () => playing?.skipToEnd();
+$('#btnStop').onclick = () => stopPlaying();
+$('#speed').onchange = () => playing?.setSpeed(+$('#speed').value);
+
+// event-order check: onEvent must fire exactly once per event, in order
+window.__checkEvents = () => { const e = window.__events || [], n = window.__lastRecord?.events.length || 0; return { n, got: e.length, ordered: e.every((x, i) => x === i) }; };
+window.__wt = { stage, THREE, showcase, showGallery, fight, buildKaijuModel, makeRecord, get playing() { return playing; } };
+showcase('superhero');
+</script>
+</body>
+</html>

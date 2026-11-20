@@ -5,6 +5,11 @@
 //
 // Events are animated strictly in order on a playback clock (scaled by speed, frozen while paused).
 // onEvent(ev, i) fires once per event, at the moment its visual lands (impact, number pop, etc).
+//
+// Rare Wild plans (js/render/wild-models.js) expose optional hooks on rig.extra.wild (reset, setTarget, onHit,
+// onStrike, origin, strafe, kneel/flare, beginSwap/swapK, reinforce/reinK, setTransformed, beamSources,
+// twinBeam). Every hook is optional, so ordinary Kaiju play exactly as before. `passive` events
+// ({ t:'passive', tg, id, name }) get a visual per id; unknown ids fall back to a generic aura pulse.
 
 import * as THREE from 'three';
 import { ABILITY_BY_ID, STATUSES } from '../data/abilities.js';
@@ -92,6 +97,28 @@ export function playBattle(stage, record, opts = {}) {
   const accent = R.map((r, k) => new THREE.Color(fs[k]?.colors?.accent || r.mats.find(m => m.userData.glow)?.color || '#5fd6ff'));
   const resetAnim = (r) => Object.assign(r.anim, { lunge: 0, recoil: 0, roar: 0, bite: 0, charge: 0, walk: 0, lift: 0, ko: 0, victory: 0, flash: 0, dodge: 0, shieldPulse: 0 });
   R.forEach((r, k) => { resetAnim(r); r.clearStatuses(); F[k].position.copy(home[k]); });
+  // wild-plan hooks (all optional) + generic glow boost used by passives on ordinary rigs
+  const WL = R.map(r => r.extra?.wild || null);
+  // human-scale wild fighters: frame toward them, push in when they act, make their hits land big
+  const tinyIdx = R.findIndex(r => r.extra?.tiny);
+  const isTiny = (k) => !!R[k]?.extra?.tiny;
+  const biasX = (a) => tinyIdx >= 0 ? home[tinyIdx].x * 0.35 : home[a].x * 0.15;
+  const fsc = (k, s) => isTiny(k) ? s * 0.6 : s;
+  const homeRotY = F.map(f => f.rotation.y);
+  const setGlowBoost = (k, f) => {
+    const r = R[k];
+    if (!r.__pbGlowBase) { if (f === 1) return; r.__pbGlowBase = r.mats.filter(m => m.userData.glow && m.userData.e0).map(m => [m, m.userData.e0.clone()]); }
+    for (const [m, e] of r.__pbGlowBase) m.userData.e0.copy(e).multiplyScalar(f);
+  };
+  const resetWild = (k) => {
+    try { WL[k]?.reset?.(); } catch (e) { console.warn('[playback] wild reset failed', e); }
+    setGlowBoost(k, 1);
+    F[k].rotation.y = homeRotY[k];
+  };
+  R.forEach((r, k) => {
+    resetWild(k);
+    try { WL[k]?.setTarget?.((out) => R[1 - k].getCenterWorld(out)); } catch { /* optional */ }
+  });
 
   // ---------- clock / scheduling
   let clock = 0, paused = false, stopped = false, skipping = false, done = false;
@@ -261,14 +288,21 @@ export function playBattle(stage, record, opts = {}) {
     const r = R[tg];
     const crit = !!ev.crit, dmg = Math.max(0, ev.dmg | 0);
     const big = crit || dmg >= maxHp[tg] * 0.12 || o.thrown;
+    const tinyA = isTiny(a) && !isTiny(tg);
     const absorbedOnly = (ev.absorbed | 0) > 0 && dmg === 0;
     r.hit(absorbedOnly ? '#9ad8ff' : '#ff2a1a', 1);
+    if (!absorbedOnly) {
+      let wp = null;
+      try { wp = WL[tg]?.onHit?.(big, new V3()) || null; } catch { wp = null; }
+      if (wp) explode(wp, big ? 1.3 : 0.9);
+    }
     if ((ev.absorbed | 0) > 0) { r.anim.shieldPulse = 1; tw(600, k => { r.anim.shieldPulse = 1 - k; }); }
-    if (!o.thrown) recoil(tg, o.small ? 0.5 : big ? 1.3 : 0.8);
-    if (big && !o.thrown) knockback(tg, crit ? 3.5 : 2);
+    if (!o.thrown) recoil(tg, tinyA ? (crit ? 2.0 : o.small ? 1.0 : 1.4) : o.small ? 0.5 : big ? 1.3 : 0.8);
+    if ((big || tinyA) && !o.thrown) knockback(tg, tinyA ? (crit ? 5.5 : o.small ? 1.6 : 3) : crit ? 3.5 : 2);
     const hp = centerOf(tg).addScaledVector(fwd[tg], R[tg].front * 0.4);
     const col = fxColor(a, ev);
     burst(hp, col, crit ? 60 : 30, crit ? 16 : 11, 0.55, 12, fwd[a].clone().multiplyScalar(0.5));
+    if (tinyA) shockwave(hp, fwd[a], col, crit);
     burst(hp, '#ffffff', crit ? 20 : 10, 8, 0.25, 0);
     // flash sphere
     const fl = new THREE.Mesh(sphGeo, addMat(col, 2.5, 0.9));
@@ -279,9 +313,9 @@ export function playBattle(stage, record, opts = {}) {
     else floatText(top, dmg, crit ? '#ffe23a' : '#ffffff', crit ? 3.8 : 2.5, crit ? 1.5 : 1.2);
     if (crit) floatText(top.clone().add(new V3(0, 2.6, 0)), 'CRIT!', '#ffb02a', 1.6, 1.3, 3);
     if ((ev.absorbed | 0) > 0 && !absorbedOnly) floatText(top.clone().add(new V3(0, -1.6, 0)), `-${ev.absorbed} shield`, '#9ad8ff', 1.2);
-    if (big) dir.focus(centerOf(tg), crit ? 0.55 : 0.7, realSec(crit ? 1100 : 800));
-    dir.shake(crit ? 0.9 : big ? 0.45 : 0.15);
-    if (crit || o.thrown) {
+    if (big) dir.focus(tinyA ? centerOf(tg).lerp(centerOf(a), 0.4) : centerOf(tg), crit ? 0.55 : 0.7, realSec(crit ? 1100 : 800));
+    dir.shake(tinyA ? (crit ? 1.5 : 0.65) : crit ? 0.9 : big ? 0.45 : 0.15);
+    if (crit || o.thrown || (tinyA && big)) {
       const behind = F[tg].position.clone().addScaledVector(fwd[tg], -(R[tg].back + 10));
       arena()?.crumbleNear(behind, 10);
     }
@@ -302,13 +336,13 @@ export function playBattle(stage, record, opts = {}) {
   }
 
   // ---------- fx builders
-  function chargeOrb(a, k = 0, color) {
+  function chargeOrb(a, k = 0, color, sizeMul = 1) {
     const g = new THREE.Group();
     const core = new THREE.Mesh(sphGeo, addMat('#ffffff', 2.5, 1));
     const halo = new THREE.Mesh(sphGeo, addMat(color, 2.2, 0.55));
     halo.scale.setScalar(2.2);
     g.add(core, halo);
-    const size = Math.max(0.5, R[a].height / 20);
+    const size = Math.max(0.5, R[a].height / 20) * sizeMul;
     const p = new V3();
     return spawn(g, (t) => {
       R[a].getMouthWorld(k, g.position);
@@ -322,8 +356,8 @@ export function playBattle(stage, record, opts = {}) {
     });
   }
 
-  function beamFx(a, k, toFn, color, life = 0.45) {
-    const w = Math.max(0.55, R[a].height / 13);
+  function beamFx(a, k, toFn, color, life = 0.45, opts = {}) {
+    const w = (R[a].extra?.tiny ? 1.5 : Math.max(0.55, R[a].height / 13)) * (opts.w ?? 1);
     const g = new THREE.Group();
     const core = new THREE.Mesh(beamGeo, addMat('#ffffff', 2.4, 1));
     const outer = new THREE.Mesh(beamGeo, addMat(color, 2.0, 0.6));
@@ -332,7 +366,8 @@ export function playBattle(stage, record, opts = {}) {
     g.add(core, outer, flare, muzzle);
     const from = new V3(), to = new V3(), end = new V3(), mid = new V3();
     return spawn(g, (t) => {
-      R[a].getMouthWorld(k, from); toFn(to);
+      if (opts.fromFn) opts.fromFn(from); else R[a].getMouthWorld(k, from);
+      toFn(to);
       const grow = Math.min(1, t / 0.08);
       const fade = t > life - 0.15 ? Math.max(0, (life - t) / 0.15) : 1;
       end.copy(from).lerp(to, grow);
@@ -516,22 +551,180 @@ export function playBattle(stage, record, opts = {}) {
     return false;
   }
 
+  // ---------- wild-plan fx (army explosions / muzzle flashes / air strikes, ribbons, passives)
+  // outsized impact for tiny attackers: a vertical shockwave ring facing the blow, ground ring, sparks, debris
+  function shockwave(p, dirV, col, crit) {
+    const s = crit ? 1.6 : 1;
+    for (let j = 0; j < (crit ? 3 : 2); j++) {
+      const ring = new THREE.Mesh(ringGeo, addMat(j ? '#ffffff' : col, 2.4, 0.9));
+      ring.quaternion.setFromUnitVectors(new V3(0, 1, 0), dirV.clone().normalize());
+      ring.position.copy(p);
+      const delay = j * 0.07;
+      spawn(ring, (t) => { const k = Math.max(0, (t - delay) / 0.45); ring.visible = t >= delay; ring.scale.setScalar(0.5 + k * 9 * s); ring.material.opacity = 0.9 * (1 - k); return k < 1; });
+    }
+    groundRings(p.clone().setY(gy()), col, 9 * s, 2, 0.55);
+    burst(p, '#ffffff', Math.round(40 * s), 22 * s, 0.4, 4, dirV.clone().multiplyScalar(0.6));
+    burst(p, '#8a7a68', Math.round(24 * s), 9, 1.0, 14);
+    if (crit) { arena()?.flash?.('#ffffff', 0.22, 220); const fl = new THREE.Mesh(sphGeo, addMat(col, 2.6, 0.9)); fl.position.copy(p); spawn(fl, (t) => { const k = t / 0.3; fl.scale.setScalar(2 + k * 10); fl.material.opacity = 0.9 * (1 - k); return k < 1; }); }
+  }
+  function explode(p, s = 1) {
+    const fl = new THREE.Mesh(sphGeo, addMat('#ffb050', 2.6, 0.95));
+    fl.position.copy(p);
+    spawn(fl, (t) => { const k = t / 0.35; fl.scale.setScalar(s * (0.8 + k * 3.2)); fl.material.opacity = 0.95 * (1 - k); return k < 1; });
+    burst(p, '#ff8a2a', Math.round(26 * s), 10 * s, 0.6, 6);
+    burst(p, '#ffe08a', Math.round(14 * s), 14 * s, 0.35, 4);
+    burst(p, '#5a5048', Math.round(12 * s), 4, 1.2, -3);
+  }
+  function muzzleFlash(p, s = 1) {
+    const fl = new THREE.Mesh(sphGeo, addMat('#ffd27a', 3, 1));
+    fl.position.copy(p);
+    spawn(fl, (t) => { const k = t / 0.12; fl.scale.setScalar(s * (0.4 + k * 0.9)); fl.material.opacity = 1 - k; return k < 1; });
+    burst(p, '#ffb050', Math.max(3, Math.round(8 * s)), 6 * s, 0.25, 0);
+    burst(p, '#6a625a', Math.max(2, Math.round(5 * s)), 2, 0.9, -2);
+  }
+  function pillar(pos, color, h, life = 1, r0 = 2) {
+    const g = new THREE.Group();
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 24, 1, true), addMat(color, 1.5, 0.4));
+    col.material.side = THREE.DoubleSide;
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 16, 1, true), addMat('#ffffff', 1.6, 0.45));
+    g.add(col, core);
+    g.position.copy(pos);
+    spawn(g, (t) => {
+      const k = t / life, open = Math.min(1, t / 0.12), fade = k > 0.55 ? Math.max(0, 1 - (k - 0.55) / 0.45) : 1;
+      col.scale.set(r0 * open * (1 + k * 0.4), h, r0 * open * (1 + k * 0.4)); col.position.y = h / 2;
+      core.scale.set(r0 * 0.3 * open, h, r0 * 0.3 * open); core.position.y = h / 2;
+      col.material.opacity = 0.4 * fade; core.material.opacity = 0.45 * fade;
+      return k < 1;
+    });
+  }
+  function groundRings(pos, color, rad, n = 2, life = 0.7) {
+    for (let j = 0; j < n; j++) {
+      const ring = new THREE.Mesh(ringGeo, addMat(color, 2.2, 0.9));
+      ring.position.copy(pos).add(new V3(0, 0.3 + j * 0.3, 0));
+      const delay = j * 0.14;
+      spawn(ring, (t) => { const k = Math.max(0, (t - delay) / life); ring.visible = t >= delay; ring.scale.setScalar(1 + k * rad); ring.material.opacity = 0.9 * (1 - k); return k < 1; });
+    }
+  }
+
+  async function airStrike(a, tg) {
+    const w = WL[a];
+    const tgt = tg != null ? F[tg].position.clone() : F[a].position.clone().addScaledVector(fwd[a], 20);
+    tgt.y = gy();
+    w.strafe(tgt);
+    dir.focus(tgt.clone().setY(gy() + 6), 0.95, realSec(2000));
+    const p = new V3(), q = new V3();
+    if (await T(820, k => {
+      w.strafeK = k * 0.5;
+      if (k > 0.5) for (let j = 0; j < w.jetCount; j++) {
+        if (Math.random() > 0.6) continue;
+        w.jetWorld(j, p);
+        q.set(tgt.x + (Math.random() - 0.5) * 8, tgt.y + Math.random() * 2, tgt.z + (Math.random() - 0.5) * 8).sub(p).normalize().multiplyScalar(80);
+        emit(p, q, '#ffe08a', 0.3, 0);
+      }
+    }, ease.linear)) return true;
+    for (let j = 0; j < w.jetCount; j++) {
+      w.jetWorld(j, p);
+      for (let b = 0; b < 2; b++) {
+        const bomb = new THREE.Mesh(sphGeo, new THREE.MeshStandardMaterial({ color: '#2a2a26', roughness: 0.6 }));
+        bomb.scale.set(0.35, 0.35, 0.7);
+        const to = tgt.clone().add(new V3((Math.random() - 0.5) * 9, 0, (Math.random() - 0.5) * 9));
+        travel(bomb, p.clone(), (out) => out.copy(to), 380 + b * 110, 0).then(() => { if (!alive()) return; explode(to.clone().setY(gy() + 1), 1.5); arena()?.groundImpact(to, 1.1); dir.shake(0.5); });
+      }
+    }
+    tw(820, k => { w.strafeK = 0.5 + k * 0.5; }, ease.linear);
+    wait(840).then(() => { if (w.strafeK >= 0.999) w.strafeK = -1; });
+    if (await W(540)) return true;
+    arena()?.flash?.('#ffb060', 0.18, 250);
+    dir.shake(0.8);
+    return false;
+  }
+
+  async function ribbonFx(a, tg) {
+    const r = R[a];
+    const cols = [accent[a].clone(), new THREE.Color(fs[a]?.colors?.body || '#ff8fc7')];
+    const from = mouthOf(a), c0 = centerOf(tg);
+    const rad = Math.max(3, R[tg].radius * 0.55), h = R[tg].height;
+    dir.focus(c0.clone().lerp(from, 0.3), 0.85, realSec(1500));
+    if (await T(220, k => { r.anim.lunge = -0.12 * k; r.anim.roar = 0.3 * k; })) return true;
+    tw(200, k => { r.anim.lunge = -0.12 + 0.5 * k; });
+    for (let n = 0; n < 2; n++) {
+      const pts = [from.clone()];
+      const mid = from.clone().lerp(c0, 0.5); mid.y += 4 + n * 2.5; mid.z += (n ? -1 : 1) * 3;
+      pts.push(mid);
+      for (let s = 0; s <= 28; s++) {
+        const u = s / 28, an = u * PI * 6 + n * PI;
+        pts.push(new V3(c0.x + Math.cos(an) * rad, gy() + h * (0.12 + 0.72 * u), c0.z + Math.sin(an) * rad));
+      }
+      const geo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 220, 0.28, 6, false);
+      const mesh = new THREE.Mesh(geo, addMat(cols[n], 1.8, 0.9));
+      const total = geo.index.count;
+      geo.setDrawRange(0, 0);
+      const pp = new V3();
+      spawn(mesh, (t) => {
+        const k = Math.min(1, t / 0.7);
+        geo.setDrawRange(0, Math.floor(total * k / 3) * 3);
+        mesh.material.opacity = t > 1.3 ? Math.max(0, 0.9 * (1 - (t - 1.3) / 0.45)) : 0.9;
+        if (k < 1 && Math.random() < 0.8) { geo.parameters.path.getPointAt(k, pp); emit(pp, new V3((Math.random() - 0.5) * 3, Math.random() * 3, (Math.random() - 0.5) * 3), Math.random() < 0.5 ? '#ffffff' : cols[n], 0.6, 0); }
+        return t < 1.75;
+      });
+    }
+    if (await W(700)) return true;
+    R[tg].hit('#ffc0e8', 0.8);
+    burst(c0, cols[0], 40, 10, 0.7, 1);
+    burst(c0, '#ffffff', 20, 8, 0.5, 0);
+    dir.shake(0.25);
+    tw(300, k => { r.anim.roar = 0.3 * (1 - k); });
+    return W(380);
+  }
+
+  function spiralFx(tg, colors, life = 1.9) {
+    const r = R[tg];
+    const g = new THREE.Group();
+    const rad = isTiny(tg) ? 1.4 : Math.max(3, r.radius * 0.7), h = isTiny(tg) ? 4.2 : r.height * 1.25;
+    const curves = [];
+    for (let n = 0; n < colors.length; n++) {
+      const pts = [];
+      for (let s = 0; s <= 60; s++) { const u = s / 60, an = u * PI * 5 + n * PI * 2 / colors.length; pts.push(new V3(Math.cos(an) * rad * (1 - u * 0.35), u * h, Math.sin(an) * rad * (1 - u * 0.35))); }
+      const curve = new THREE.CatmullRomCurve3(pts);
+      curves.push(curve);
+      g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 200, 0.2, 6, false), addMat(colors[n], 1.25, 0.6)));
+    }
+    const base = F[tg].position.clone(); base.y = gy();
+    g.position.copy(base);
+    const pp = new V3();
+    spawn(g, (t) => {
+      const k = t / life;
+      g.rotation.y = t * 5;
+      g.scale.set(1 + k * 0.25, Math.min(1, t / 0.5), 1 + k * 0.25);
+      const fade = k > 0.75 ? Math.max(0, 1 - (k - 0.75) / 0.25) : 1;
+      g.children.forEach(m => { m.material.opacity = 0.6 * fade; });
+      for (let j = 0; j < 3; j++) {
+        const c = curves[j % curves.length]; c.getPointAt(Math.random(), pp);
+        pp.multiply(g.scale).applyAxisAngle(new V3(0, 1, 0), g.rotation.y).add(base);
+        emit(pp, new V3(0, 3 + Math.random() * 3, 0), Math.random() < 0.4 ? '#ffffff' : colors[j % colors.length], 0.6, 0);
+      }
+      return k < 1;
+    });
+  }
+
   // ---------- action context
   let act = null;
   const hasHits = (i, a) => {
     for (let j = i + 1; j < N; j++) {
       const e = events[j];
       if (e.t === 'hit' || e.t === 'miss') { if ((e.a ?? a) === a) return true; continue; }
-      if (e.t === 'status' || e.t === 'expire' || e.t === 'heal' || e.t === 'selfdmg') continue;
+      if (e.t === 'status' || e.t === 'expire' || e.t === 'heal' || e.t === 'selfdmg' || e.t === 'passive') continue;
       return false;
     }
     return false;
   };
-  const hitCount = (i, a) => { let n = 0; for (let j = i + 1; j < N; j++) { const e = events[j]; if (e.t === 'hit' || e.t === 'miss') n++; else if (!['status', 'expire', 'heal', 'selfdmg'].includes(e.t)) break; } return n; };
+  const hitCount = (i, a) => { let n = 0; for (let j = i + 1; j < N; j++) { const e = events[j]; if (e.t === 'hit' || e.t === 'miss') n++; else if (!['status', 'expire', 'heal', 'selfdmg', 'passive'].includes(e.t)) break; } return n; };
 
   async function endAction() {
     if (act?.orb) kill(act.orb);
+    if (act?.orb2) kill(act.orb2);
     act = null;
+    for (let k = 0; k < 2; k++) F[k].rotation.y = homeRotY[k];
     const ps = [];
     for (let k = 0; k < 2; k++) {
       const rr = R[k], an = rr.anim;
@@ -572,20 +765,27 @@ export function playBattle(stage, record, opts = {}) {
     fire(i);
     const r = R[a];
     r.anim.reach = contactReach(a);
-    dir.setBias(home[a].x * 0.15);
+    dir.setBias(biasX(a));
+    if (isTiny(a)) dir.focus(centerOf(a).lerp(centerOf(tg), 0.3), 0.55, realSec(1000));
     switch (kind) {
       case 'melee': case 'multi':
         if (await T(220, k => { r.anim.lunge = -0.12 * k; })) return;
         break;
       case 'beam': {
         const col = beamColor(a, null);
+        const WH = WL[a];
         dir.focus(mouthOf(a).lerp(centerOf(tg), 0.3), 0.85, realSec(1300));
-        act.orb = chargeOrb(a, 0, col);
+        act.orb = chargeOrb(a, 0, col, WH?.twinBeam ? 0.45 : 1);
+        if (WH?.twinBeam) act.orb2 = chargeOrb(a, 1, col, 0.45);
+        if (WH?.beamSources) {
+          const cs = WH.memberColors?.() || [];
+          WH.beamSources().forEach((o, j) => beamFx(a, 0, (out) => R[a].getMouthWorld(0, out), cs[j] || col, 0.7, { fromFn: (out) => o.getWorldPosition(out), w: 0.18 }));
+        }
         if (await T(700, k => { r.anim.charge = k; })) return;
         break;
       }
       case 'projectile':
-        if (await T(240, k => { r.anim.lunge = -0.15 * k; })) return;
+        if (!WL[a]?.noLunge && await T(240, k => { r.anim.lunge = -0.15 * k; })) return;
         if (!strikes) {
           // debuff projectiles (e.g. web) have no hit events: still throw something at the target
           const obj = makeProjectile(ev.ab, a, null);
@@ -598,10 +798,11 @@ export function playBattle(stage, record, opts = {}) {
         }
         break;
       case 'aoe':
-        if (await T(320, k => { r.anim.lift = Math.sin(k * PI / 2) * 2.2 / r.scale; r.anim.roar = k * 0.5; }, ease.out)) return;
-        if (!strikes) { await aoeBlast(a, null); if (!alive()) return; await W(300); }
+        if (await T(320, k => { if (!WL[a]?.noLift) r.anim.lift = Math.sin(k * PI / 2) * 2.2 / r.scale; r.anim.roar = k * 0.5; }, ease.out)) return;
+        if (!strikes) { if (WL[a]?.strafe) await airStrike(a, null); else await aoeBlast(a, null); if (!alive()) return; await W(300); }
         break;
       case 'grab': {
+        if (ev.ab === 'ribbon_bind' || WL[a]?.ribbonGrab) { await ribbonFx(a, tg); break; }
         const from = F[a].position.clone();
         const to = F[tg].position.clone().addScaledVector(fwd[a], -(R[a].front * 0.75 + R[tg].front * 0.35));
         if (from.distanceTo(home[a]) < 0.1) {
@@ -624,10 +825,19 @@ export function playBattle(stage, record, opts = {}) {
     if (!act || act.a !== a) act = { a, tg, kind: 'melee', hits: 0, hasHits: true, nHits: 1 };
     act.hits++;
     const kind = act.kind, r = R[a], first = act.hits === 1;
+    const WH = WL[a];
     if (kind !== 'grab') r.anim.reach = contactReach(a);
+    try { WH?.onStrike?.(act.hits, act.nHits, kind, act.ab); } catch { /* optional */ }
     switch (kind) {
       case 'multi': {
         const from = r.anim.lunge;
+        if (String(act.ab || '').includes('spin')) {
+          // spinning multi-hit (e.g. Hurricane Spin): one full turn per hit, ends facing the same way
+          const n = act.hits;
+          tw(240, k => { F[a].rotation.y = homeRotY[a] + (n - 1 + k) * PI * 2; }, ease.linear);
+          groundRings(F[a].position.clone().setY(gy()), '#e8f4ff', R[a].radius * 0.9, 1, 0.4);
+          burst(centerOf(a), '#e8f4ff', 14, 12, 0.4, 0);
+        }
         if (await T(110, k => { r.anim.lunge = lerp(from, 1, k); r.anim.bite = k; }, ease.in)) return;
         if (hit) impact(ev, i, { small: true }); else missFx(ev, i);
         if (await T(130, k => { r.anim.lunge = lerp(1, 0.4, k); r.anim.bite = 1 - k; })) return;
@@ -635,13 +845,20 @@ export function playBattle(stage, record, opts = {}) {
       }
       case 'beam': {
         if (act.orb) { kill(act.orb); act.orb = null; }
+        if (act.orb2) { kill(act.orb2); act.orb2 = null; }
         const k = act.hits - 1;
         const col = beamColor(a, ev);
         const side = Math.random() < 0.5 ? -1 : 1;
         const toFn = hit ? (out) => R[tg].getCenterWorld(out)
           : (out) => R[tg].getCenterWorld(out).add(new V3(0, R[tg].height * 0.45, side * (R[tg].radius + 4)));
         dir.shake(0.25);
-        beamFx(a, act.nHits > 1 ? k : 0, toFn, col, act.nHits > 1 ? 0.35 : 0.5);
+        const life = act.nHits > 1 ? 0.35 : 0.5;
+        if (WH?.twinBeam) { beamFx(a, 0, toFn, col, life, { w: 0.45 }); beamFx(a, 1, toFn, col, life, { w: 0.45 }); }
+        else beamFx(a, act.nHits > 1 ? k : 0, toFn, col, life);
+        if (WH?.beamSources) {
+          const cs = WH.memberColors?.() || [];
+          WH.beamSources().forEach((o, j) => beamFx(a, 0, (out) => R[a].getMouthWorld(0, out), cs[j] || col, life + 0.1, { fromFn: (out) => o.getWorldPosition(out), w: 0.28 }));
+        }
         if (await W(90)) return;
         if (hit) impact(ev, i); else missFx(ev, i);
         if (await W(act.nHits > 1 ? 260 : 380)) return;
@@ -651,25 +868,42 @@ export function playBattle(stage, record, opts = {}) {
       case 'projectile': {
         const obj = makeProjectile(act.ab, a, ev);
         const id = String(act.ab || '');
-        const origin = id.includes('punch') ? (r.attach.handR || r.mouth) : (id.includes('missile') && r.attach.shoulderL ? (act.hits % 2 ? r.attach.shoulderL : r.attach.shoulderR) : r.mouth);
-        const from = new V3(); (origin || r.mouth).getWorldPosition(from);
-        if (id.includes('toss')) from.y += R[a].height * 0.4;
-        tw(120, k => { r.anim.lunge = -0.15 + 0.6 * k; });
+        const from = new V3();
+        let o = null;
+        try { o = WH?.origin?.(act.ab, act.hits, act.nHits, from) || null; } catch { o = null; }
+        if (!o) {
+          const origin = id.includes('punch') ? (r.attach.handR || r.mouth) : (id.includes('missile') && r.attach.shoulderL ? (act.hits % 2 ? r.attach.shoulderL : r.attach.shoulderR) : r.mouth);
+          (origin || r.mouth).getWorldPosition(from);
+          if (id.includes('toss')) from.y += R[a].height * 0.4;
+        } else {
+          if (o.scale) obj.scale.setScalar(o.scale);
+          muzzleFlash(from, o.flash ?? 1);
+        }
+        if (!WH?.noLunge) tw(120, k => { r.anim.lunge = -0.15 + 0.6 * k; });
         const missOff = new V3(0, 0, (Math.random() < 0.5 ? -1 : 1) * (R[tg].radius + 5));
         const toFn = hit ? (out) => R[tg].getCenterWorld(out) : (out) => { R[tg].getCenterWorld(out).add(missOff); out.y = gy(); return out; };
         const dist = from.distanceTo(centerOf(tg));
-        const ms = act.nHits > 2 ? 360 : id.includes('toss') ? 700 : 480;
-        const arc = id.includes('toss') ? dist * 0.35 : id.includes('missile') ? dist * 0.18 : id.includes('web') ? dist * 0.1 : dist * 0.05;
+        const ms = o?.ms ?? (act.nHits > 2 ? 360 : id.includes('toss') ? 700 : 480);
+        const arc = o ? dist * (o.arcK ?? 0.05) : id.includes('toss') ? dist * 0.35 : id.includes('missile') ? dist * 0.18 : id.includes('web') ? dist * 0.1 : dist * 0.05;
+        // cosmetic salvo from the other guns (tank column, rifle squads)
+        if (o?.extras) for (const p of o.extras) {
+          muzzleFlash(p, (o.flash ?? 1) * 0.8);
+          const ex = makeProjectile(act.ab, a, ev);
+          if (o.scale) ex.scale.setScalar(o.scale);
+          const jit = new V3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
+          travel(ex, p.clone(), (out) => toFn(out).add(jit), ms * (0.9 + Math.random() * 0.25), p.distanceTo(centerOf(tg)) * (o.arcK ?? 0.05))
+            .then(() => { if (!alive()) return; const q = centerOf(tg).add(jit); burst(q, fxColor(a, ev), 10, 8, 0.4, 6); });
+        }
         await travel(obj, from, toFn, ms, arc);
         if (!alive()) return;
         if (hit) impact(ev, i); else { missFx(ev, i, { hop: true }); const p = new V3(); toFn(p); arena()?.groundImpact(p, 0.8); }
-        if (id.includes('toss') || id.includes('missile')) arena()?.groundImpact(centerOf(tg).setY(gy()), 0.6);
-        tw(160, k => { r.anim.lunge = 0.45 * (1 - k); });
+        if (id.includes('toss') || id.includes('missile') || (o && (o.arcK ?? 0) > 0.2)) arena()?.groundImpact(centerOf(tg).setY(gy()), 0.6);
+        if (!WH?.noLunge) tw(160, k => { r.anim.lunge = 0.45 * (1 - k); });
         if (await W(act.nHits > 2 ? 60 : 160)) return;
         break;
       }
       case 'aoe': {
-        if (first) { if (await aoeBlast(a, tg)) return; }
+        if (first) { if (await (WH?.strafe ? airStrike(a, tg) : aoeBlast(a, tg))) return; }
         if (hit) impact(ev, i); else missFx(ev, i, { hop: true });
         if (await W(first ? 260 : 140)) return;
         break;
@@ -758,11 +992,152 @@ export function playBattle(stage, record, opts = {}) {
     await W(600);
   }
 
+  // ---------- passives ({ t:'passive', tg, id, name }); they can land mid-action, so no endAction here
+  const passiveTitle = (ev) => String(ev.name || ev.id || 'Passive').toUpperCase();
+
+  async function passiveLastStand(tg, ev, i) {
+    const r = R[tg], w = WL[tg], an = r.anim;
+    const canKneel = w && 'kneel' in w;
+    const gold = new THREE.Color('#ffd23f');
+    dir.focus(centerOf(tg), fsc(tg, 0.68), realSec(2400));
+    r.hit('#ffffff', 0.7);
+    // stagger down to one knee
+    if (await T(520, k => { if (canKneel) w.kneel = k; else an.ko = 0.3 * k; an.recoil = Math.sin(k * PI) * 0.7; }, ease.out)) return;
+    dir.shake(0.4);
+    arena()?.groundImpact(F[tg].position, 0.9);
+    floatText(topOf(tg).add(new V3(0, -1.5, 0)), '...', '#cfd8e0', 1.6, 0.8, 1);
+    if (await W(480)) return;
+    // ...and rise with a golden flare
+    fire(i);
+    const base = F[tg].position.clone(); base.y = gy();
+    pillar(base, gold, r.height * 1.7, 1.1, Math.max(1.6, r.radius * 0.3));
+    groundRings(base, gold, Math.max(8, r.radius * 2), 3, 0.8);
+    burst(centerOf(tg), '#ffe27a', 90, 16, 0.9, -2);
+    burst(centerOf(tg), '#ffffff', 30, 10, 0.5, 0);
+    arena()?.flash?.('#ffd860', 0.18, 350);
+    dir.shake(0.6);
+    r.hit('#ffd23f', 1);
+    floatText(topOf(tg), passiveTitle(ev), '#ffd23f', 2.3, 1.9, 3);
+    if (w && 'flare' in w) { w.flare = 1; tw(1700, k => { w.flare = 1 - k; }, ease.in); }
+    if (await T(460, k => { if (canKneel) w.kneel = 1 - k; else an.ko = 0.3 * (1 - k); an.lift = Math.sin(k * PI) * 1.4 / r.scale; an.roar = Math.sin(k * PI) * 0.6; }, ease.out)) return;
+    an.lift = 0; an.roar = 0;
+    await W(450);
+  }
+
+  async function passiveTagTeam(tg, ev, i) {
+    const r = R[tg], w = WL[tg];
+    const p = new V3();
+    if (w?.frontWorld) w.frontWorld(p); else p.copy(centerOf(tg));
+    dir.focus(p, fsc(tg, 0.75), realSec(2000));
+    const col = accent[tg];
+    if (w?.beginSwap) {
+      w.beginSwap();
+      let landed = false;
+      if (await T(1000, k => {
+        w.swapK = k;
+        if (!landed && k >= 0.55) {
+          landed = true;
+          fire(i);
+          const g = p.clone(); g.y = gy();
+          pillar(g, col, r.height * 1.4, 0.8, 2.2);
+          groundRings(g, col, 10, 2, 0.6);
+          const fl = new THREE.Mesh(sphGeo, addMat('#ffffff', 2.6, 1)); fl.position.copy(p);
+          spawn(fl, (t) => { const kk = t / 0.3; fl.scale.setScalar(1 + kk * 7); fl.material.opacity = 1 - kk; return kk < 1; });
+          burst(p, col, 50, 14, 0.6, 4); burst(p, '#ffffff', 20, 10, 0.4, 0);
+          dir.shake(0.5);
+          r.hit('#ffffff', 0.8);
+          floatText(topOf(tg), 'TAG IN!', '#ffffff', 2.4, 1.5, 3);
+          floatText(topOf(tg).add(new V3(0, -1.6, 0)), passiveTitle(ev), col.getStyle(), 1.5, 1.6, 2.5);
+        }
+      }, ease.linear)) return;
+      w.swapK = 1;
+      await W(250);
+    } else {
+      fire(i);
+      floatText(topOf(tg), passiveTitle(ev), col.getStyle(), 2.2, 1.6, 3);
+      await buffFx(tg, col.getStyle());
+    }
+  }
+
+  async function passiveSwarm(tg, ev, i) {
+    const r = R[tg], w = WL[tg];
+    fire(i);
+    floatText(topOf(tg), 'RESISTED', '#ffe08a', 2.6, 1.6, 3);
+    floatText(topOf(tg).add(new V3(0, -1.6, 0)), ev.resisted ? `${passiveTitle(ev)}: ${String(ev.resisted).toUpperCase()}` : passiveTitle(ev), '#ffcf8a', 1.3, 1.6, 2.5);
+    r.hit('#ffe08a', 0.6);
+    if (w?.reinforce) {
+      w.reinforce();
+      dir.focus(centerOf(tg).addScaledVector(fwd[tg], -6), 0.85, realSec(1500));
+      if (w.strafe && w.strafeK < 0) {
+        w.strafe(F[tg].position.clone().addScaledVector(fwd[tg], 4));
+        tw(1500, k => { w.strafeK = k; }, ease.linear);
+        wait(1520).then(() => { if (w.strafeK >= 0.999) w.strafeK = -1; });
+      }
+      const k0 = w.reinK || 0;
+      if (await T(1100, k => { w.reinK = Math.max(k0, k); if (Math.random() < 0.5) burst(F[tg].position.clone().addScaledVector(fwd[tg], -8 + Math.random() * 4).setY(gy() + 0.5), '#9a8a70', 2, 3, 0.8, -1); }, ease.out)) return;
+      await W(200);
+    } else {
+      groundRings(F[tg].position.clone().setY(gy()), accent[tg], Math.max(6, r.radius * 1.5), 2, 0.6);
+      await W(650);
+    }
+  }
+
+  async function passiveTransform(tg, ev, i) {
+    const r = R[tg], w = WL[tg], an = r.anim;
+    const cA = accent[tg].clone(), cB = new THREE.Color(fs[tg]?.colors?.body || '#ffffff'), cW = new THREE.Color('#ffffff');
+    dir.focus(centerOf(tg), fsc(tg, 0.62), realSec(2800));
+    // ribbon / light spiral while she rises and spins
+    spiralFx(tg, [cA, cB], 1.9);
+    const rot0 = homeRotY[tg];
+    if (await T(1500, k => {
+      an.lift = Math.sin(Math.min(1, k * 1.5) * PI / 2) * 2.4 / r.scale;
+      an.roar = 0.5 * k;
+      F[tg].rotation.y = rot0 + ease.inOut(k) * PI * 4;
+      r.hit(cA.getStyle(), 0.25 + 0.3 * k);
+    }, ease.linear)) return;
+    F[tg].rotation.y = rot0;
+    // burst of sparkles, then the brighter form for the rest of the fight
+    fire(i);
+    const c = centerOf(tg);
+    burst(c, cA, 110, 20, 1.1, 1.5);
+    burst(c, cB, 70, 15, 1.0, 1);
+    burst(c, cW, 50, 12, 0.7, 0);
+    const fl = new THREE.Mesh(sphGeo, addMat(cA, 1.6, 0.7)); fl.position.copy(c);
+    spawn(fl, (t) => { const k = t / 0.4; fl.scale.setScalar(1 + k * r.height * 0.45); fl.material.opacity = 0.7 * (1 - k); return k < 1; });
+    groundRings(F[tg].position.clone().setY(gy()), cA, Math.max(10, r.radius * 2.5), 3, 0.9);
+    arena()?.flash?.(cA.getStyle(), 0.22, 400);
+    dir.shake(0.7);
+    r.hit('#ffffff', 1);
+    floatText(topOf(tg), passiveTitle(ev) + '!', cA.getStyle(), 2.6, 2.0, 3);
+    if (w?.setTransformed) tw(650, k => w.setTransformed(k), ease.out);
+    else tw(650, k => setGlowBoost(tg, 1 + 1.2 * k), ease.out);
+    if (await W(550)) return;
+    await T(420, k => { an.lift = 2.4 / r.scale * (1 - k); an.roar = 0.5 * (1 - k); });
+  }
+
+  async function passiveGeneric(tg, ev, i) {
+    fire(i);
+    floatText(topOf(tg), passiveTitle(ev), accent[tg].getStyle(), 2.0, 1.6, 3);
+    await buffFx(tg, accent[tg].getStyle());
+  }
+
+  async function onPassive(ev, i) {
+    const tg = ev.tg ?? 0;
+    if (!R[tg]) { fire(i); await W(80); return; }
+    switch (ev.id) {
+      case 'last_stand': return passiveLastStand(tg, ev, i);
+      case 'tag_team': return passiveTagTeam(tg, ev, i);
+      case 'swarm': return passiveSwarm(tg, ev, i);
+      case 'transformation': return passiveTransform(tg, ev, i);
+      default: return passiveGeneric(tg, ev, i);
+    }
+  }
+
   async function onEnd(ev, i) {
     fire(i);
     const w = ev.winner ?? record.winner;
     if (w === 0 || w === 1) {
-      dir.focus(centerOf(w), 0.72, realSec(4000), w === 0 ? -0.45 : 0.45);
+      dir.focus(centerOf(w), fsc(w, 0.72), realSec(4000), w === 0 ? -0.45 : 0.45);
       dir.shake(0.3);
       await T(600, k => { R[w].anim.victory = k; });
     } else {
@@ -777,7 +1152,7 @@ export function playBattle(stage, record, opts = {}) {
       case 'turn':
         await endAction(); if (!alive()) return;
         fire(i);
-        if (R[ev.a]) dir.setBias(home[ev.a].x * 0.15);
+        if (R[ev.a]) dir.setBias(biasX(ev.a));
         await W(240);
         break;
       case 'skip': {
@@ -843,6 +1218,7 @@ export function playBattle(stage, record, opts = {}) {
         await W(450);
         break;
       }
+      case 'passive': await onPassive(ev, i); break;
       case 'hazard': await endAction(); if (!alive()) return; await onHazard(ev, i); break;
       case 'ko': await endAction(); if (!alive()) return; await onKO(ev, i); break;
       case 'end': await endAction(); if (!alive()) return; await onEnd(ev, i); break;
@@ -863,6 +1239,17 @@ export function playBattle(stage, record, opts = {}) {
     }
     const endEv = events.find(e => e?.t === 'end');
     const w = endEv ? (endEv.winner ?? record.winner) : null;
+    // persistent passive states: transformed glow, re-formed team, reinforcements that rolled in
+    for (let k = 0; k < 2; k++) resetWild(k);
+    for (const e of events) {
+      if (e?.t !== 'passive' || !R[e.tg]) continue;
+      const w = WL[e.tg];
+      try {
+        if (e.id === 'transformation') { if (w?.setTransformed) w.setTransformed(1); else setGlowBoost(e.tg, 2.2); }
+        else if (e.id === 'tag_team' && w?.beginSwap) { w.beginSwap(); w.swapK = 1; }
+        else if (e.id === 'swarm' && w?.reinforce) w.reinforce(true);
+      } catch (err) { console.warn('[playback] passive final state failed', err); }
+    }
     for (let k = 0; k < 2; k++) {
       resetAnim(R[k]);
       F[k].position.copy(home[k]);
@@ -871,7 +1258,7 @@ export function playBattle(stage, record, opts = {}) {
       R[k].anim.ko = koed.has(k) ? 1 : 0;
       R[k].anim.victory = endEv && w === k ? 1 : 0;
     }
-    if (w === 0 || w === 1) dir.focus(centerOf(w), 0.72, 4, w === 0 ? -0.45 : 0.45);
+    if (w === 0 || w === 1) dir.focus(centerOf(w), fsc(w, 0.72), 4, w === 0 ? -0.45 : 0.45);
     else dir.clearFocus();
   }
 

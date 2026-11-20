@@ -35,6 +35,7 @@ function makeDirector(camera) {
     const tiny = !!rig.extra?.tiny; // human-scale wild fighters: zoom to fit instead of the kaiju minimum
     d.radius = Math.max(tiny ? 3 : 16, r * 1.8 + h * 1.0);
     d.height = tiny ? h * 0.35 + 0.6 : rig.hover ? h * 0.9 + 6 : h * 0.45 + 4;
+    if (tiny) d.target.y = model.position.y + h * 0.62;
     d.baseAngle = 0.55; d.orbitAmp = 0.12; d.orbitSpeed = 0.2;
     d.focusLeft = 0; d.snapNext = true;
   };
