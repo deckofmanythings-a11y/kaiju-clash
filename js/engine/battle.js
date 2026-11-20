@@ -1,12 +1,12 @@
 // Deterministic auto-battle simulator. Pure: no DOM, no Math.random, no Date, integer math only.
 // simulateBattle({ seed, env, a, b }) -> BattleRecord (see DESIGN.md).
 import { createRng, fnv1a } from './rng.js';
-import { FRAME_BY_ID, STATS, effectiveStats } from '../data/frames.js';
+import { FRAME_BY_ID, STATS, effectiveStats, PASSIVES } from '../data/frames.js';
 import { ABILITY_BY_ID, STATUSES, abilityAvailableTo, MAX_EQUIPPED } from '../data/abilities.js';
 import { ENV_BY_ID } from '../data/environments.js';
 import { INJURY_BY_ID, MAX_INJURIES, applyInjuries } from '../data/injuries.js';
 
-export const ENGINE_VERSION = 2; // v2: persistent injuries lower stats
+export const ENGINE_VERSION = 3; // v2: persistent injuries lower stats. v3: frame passives (rare Wild enemies)
 const MAX_ACTIONS = 80;          // 40 rounds
 const GAUGE = 1000;              // initiative threshold
 const START_ENERGY = 20;
@@ -68,7 +68,7 @@ export function simulateBattle({ seed, env: envId, a, b }) {
     const stats = envStats(s, env);
     return {
       i, s, frame, stats, maxHp: stats.hp, hp: stats.hp, energy: START_ENERGY,
-      gauge: 0, statuses: [], cds: {},
+      gauge: 0, statuses: [], cds: {}, passive: frame.passive || null, pUsed: false, pPending: false,
       kit: [frame.basic, ...s.abilities].map(id => ABILITY_BY_ID[id]),
     };
   });
@@ -84,6 +84,10 @@ export function simulateBattle({ seed, env: envId, a, b }) {
 
   function applyStatus(src, tg, eff) {
     if (!rng.roll(eff.chance ?? 100)) return;
+    if (tg.passive === 'swarm' && (eff.status === 'stun' || eff.status === 'bind')) {
+      emit({ t: 'passive', tg: tg.i, id: 'swarm', name: PASSIVES.swarm.name, resisted: eff.status });
+      return;
+    }
     const existing = has(tg, eff.status);
     const rec = existing || { id: eff.status, turns: 0, val: 0 };
     rec.turns = Math.max(rec.turns, eff.turns || 1);
@@ -109,8 +113,38 @@ export function simulateBattle({ seed, env: envId, a, b }) {
       sh.val -= absorbed; amount -= absorbed;
       if (sh.val <= 0) { tg.statuses = tg.statuses.filter(x => x !== sh); emit({ t: 'expire', tg: tg.i, st: 'shield' }); }
     }
+    if (tg.passive === 'last_stand' && !tg.pUsed && amount >= tg.hp && tg.hp > 1) {
+      amount = tg.hp - 1; tg.pUsed = true; tg.pPending = true;
+    }
     tg.hp = Math.max(0, tg.hp - amount);
     return { dealt: amount, absorbed };
+  }
+
+  // Passives that react to taking damage. Called right after each hit/dot/hazard event is emitted.
+  function afterDamage(tg) {
+    if (tg.hp <= 0) return;
+    if (tg.pPending) {
+      tg.pPending = false;
+      emit({ t: 'passive', tg: tg.i, id: 'last_stand', name: PASSIVES.last_stand.name });
+      applyStatus(tg, tg, { status: 'enrage', chance: 100, turns: 2 });
+      return;
+    }
+    if (tg.pUsed || tg.hp * 2 >= tg.maxHp) return;
+    if (tg.passive !== 'tag_team' && tg.passive !== 'transformation') return;
+    tg.pUsed = true;
+    emit({ t: 'passive', tg: tg.i, id: tg.passive, name: PASSIVES[tg.passive].name });
+    for (const x of tg.statuses.filter(x => NEGATIVE.has(x.id))) emit({ t: 'expire', tg: tg.i, st: x.id });
+    tg.statuses = tg.statuses.filter(x => !NEGATIVE.has(x.id));
+    if (tg.passive === 'tag_team') {
+      const amt = Math.min(tg.maxHp - tg.hp, pct(tg.maxHp, 30));
+      tg.hp += amt;
+      emit({ t: 'heal', tg: tg.i, amt, hp: tg.hp });
+    } else {
+      tg.energy = 100;
+      applyStatus(tg, tg, { status: 'shield', chance: 100, turns: 3, power: 10 });
+      applyStatus(tg, tg, { status: 'charged', chance: 100, turns: 3 });
+      applyStatus(tg, tg, { status: 'haste', chance: 100, turns: 3 });
+    }
   }
 
   function koCheck() {
@@ -207,6 +241,7 @@ export function simulateBattle({ seed, env: envId, a, b }) {
       if (ab.execute && tg.hp * 100 < tg.maxHp * ab.execute) raw *= 2;
       const { dealt, absorbed } = damage(tg, Math.max(1, raw));
       emit({ t: 'hit', a: f.i, tg: tg.i, dmg: dealt, crit, type, hp: tg.hp, absorbed, hitNo: h, hits });
+      afterDamage(tg);
       if (tg.hp <= 0) return;
     }
     if (landed) for (const e of ab.effects || []) applyStatus(f, tg, e);
@@ -224,6 +259,7 @@ export function simulateBattle({ seed, env: envId, a, b }) {
       return { tg: f.i, dmg: dealt, hp: f.hp };
     });
     emit({ t: 'hazard', name: hz.name, type: hz.type, hits });
+    for (const f of targets) afterDamage(f);
     if (hz.status) for (const f of targets) if (f.hp > 0) applyStatus(f, f, hz.status);
   }
 
@@ -247,10 +283,12 @@ export function simulateBattle({ seed, env: envId, a, b }) {
     emit({ t: 'turn', n: actions, a: f.i, en: f.energy });
 
     // Start-of-turn ticks: DoTs and regen.
-    for (const x of f.statuses) {
+    for (const x of [...f.statuses]) {
+      if (!f.statuses.includes(x)) continue;   // cleansed by a passive earlier this tick
       if (STATUSES[x.id]?.dot && x.val > 0) {
         const { dealt } = damage(f, pct(x.val, typeMult(STATUSES[x.id].dot)), false);
         emit({ t: 'dot', tg: f.i, st: x.id, dmg: dealt, hp: f.hp });
+        afterDamage(f);
       } else if (x.id === 'regen' && f.hp < f.maxHp) {
         const amt = Math.min(f.maxHp - f.hp, x.val);
         f.hp += amt;

@@ -1,7 +1,7 @@
-import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES, STAT_BLURBS, MAX_STAT_LEVEL, effectiveStats } from '../data/frames.js';
+import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES, STAT_BLURBS, MAX_STAT_LEVEL, effectiveStats, PASSIVES, WILD_FRAMES } from '../data/frames.js';
 import { ABILITY_BY_ID, STATUSES, MAX_EQUIPPED, abilitiesForFrame, abilityScope } from '../data/abilities.js';
 import { ENV_BY_ID, ENVIRONMENTS } from '../data/environments.js';
-import { statUpgradeCost, powerRating, battleReward } from '../data/economy.js';
+import { statUpgradeCost, powerRating, battleReward, RARE_REWARD_MULT } from '../data/economy.js';
 import { simulateBattle, verifyReplay, ENGINE_VERSION } from '../engine/battle.js';
 import { randomSeed, createRng } from '../engine/rng.js';
 import { INJURY_BY_ID, conditionOf, deathChance, healCost, applyInjuries } from '../data/injuries.js';
@@ -33,7 +33,7 @@ function updateTop() {
   $('#nav').style.visibility = me?.player ? 'visible' : 'hidden';
 }
 function applyBoot(b) {
-  if (b.player) me = { player: b.player, kaiju: b.kaiju, defenses: b.defenses || [], fallen: b.fallen || [] };
+  if (b.player) me = { player: b.player, kaiju: b.kaiju, defenses: b.defenses || [], fallen: b.fallen || [], trophies: Object.fromEntries(b.trophies || []) };
   if (b.needsName) me = { needsName: true };
   updateTop();
 }
@@ -101,6 +101,7 @@ async function initStage() {
     const [st, pb] = await Promise.all([import('../render/stage.js'), import('../render/playback.js')]);
     stage = st.createStage($('#stage'));
     playBattle = pb.playBattle;
+    await import('../render/wild-models.js').catch((e) => console.warn('rare enemy models unavailable', e));
     window.addEventListener('resize', () => stage.resize());
     setEnv('city'); refreshShowcase();
   } catch (e) { console.warn('3D renderer unavailable, running text-only', e); }
@@ -110,6 +111,7 @@ async function initStage() {
 const SCREENS = { auth, name: nameScreen, hangar, creator, lab, arena, ladder: ladderScreen, replays };
 function go(s) {
   if (playing) { playing.stop(); playing = null; }
+  applyPendingBoot();   // leaving a fight early still settles the displayed state
   if (!me) s = 'auth';
   else if (me.needsName) s = 'name';
   else if (!active() && !['creator', 'ladder', 'replays'].includes(s)) s = 'creator';
@@ -197,6 +199,9 @@ function hangar() {
     <textarea readonly id="mycode">${codes.kaijuCode(snap(k, { owner: me.player.name }))}</textarea>
     <div class="row" style="margin-top:6px"><button class="btn ghost small" id="copycode">Copy code</button><span class="grow"></span>
     ${me.kaiju.length > 1 ? `<button class="btn ghost small" id="release">Release ${esc(k.name)}</button>` : ''}</div>
+    <h3>Trophies</h3>
+    <div class="trophies">${WILD_FRAMES.map(w => { const n = me.trophies[w.id] || 0; return `<div class="trophy ${n ? 'got' : ''}" title="${esc(w.blurb)}"><b>${n ? '×' + n : '?'}</b><span>${n ? w.name : 'Undiscovered'}</span></div>`; }).join('')}</div>
+    <p class="rec" style="margin-top:4px">Rare Wild encounters: defenders of humanity who sometimes appear in the Arena. Beat one for double Biomass and a trophy.</p>
     ${me.fallen.length ? '<h3>Hall of the Fallen</h3>' + me.fallen.map((f, i) => `
       <div class="card click fallen" data-fallen="${i}">
         <div class="row"><b class="grow">☠ ${esc(f.name)}</b><span class="rec">${new Date(f.died_at).toLocaleDateString()}</span></div>
@@ -342,16 +347,20 @@ async function arena() {
     <p class="sub">Fights run on the server and are automatic. Defenders can be injured but are never killed. ${left ? `${left} rated fights left today.` : '<b>Daily rated fights used up:</b> further fights pay no Biomass or Elo until tomorrow (UTC).'}</p>
     ${offers.list.map((o, i) => {
       const e = ENV_BY_ID[o.env], s = o.snapshot, rr = powerRating(s);
-      const tag = o.kind === 'player' ? `<span class="tag ex">Player</span>` : `<span class="tag">Wild</span>`;
-      return `<div class="card">
+      const tag = o.kind === 'player' ? `<span class="tag ex">Player</span>` : o.kind === 'rare' ? `<span class="tag rare">★ Rare</span>` : `<span class="tag">Wild</span>`;
+      const pas = o.kind === 'rare' ? PASSIVES[FRAME_BY_ID[s.frame]?.passive] : null;
+      const mult = o.kind === 'rare' ? RARE_REWARD_MULT : 1;
+      return `<div class="card ${o.kind === 'rare' ? 'rarecard' : ''}">
+        ${o.kind === 'rare' ? `<div class="rarebanner">★ Rare encounter: ${FRAME_BY_ID[s.frame].name}</div>` : ''}
         <div class="row"><b class="grow">${esc(s.name)}</b>${tag}<span class="elo" style="margin-left:6px">${o.elo}</span></div>
         <div class="rec">${(s.injuries || []).length ? condBadge(s.injuries) + ' ' : ''}${FRAME_BY_ID[s.frame].name}${o.kind === 'player' ? ' · ' + esc(s.owner) + (o.record ? ` · ${o.record[0]}W ${o.record[1]}L` : '') : ''} · Power ${rr}</div>
         <div class="rec">${s.abilities.map(a => ABILITY_BY_ID[a]?.name).filter(Boolean).join(', ') || 'Basic attack only'}</div>
+        ${pas ? `<div class="rec" style="margin-top:4px"><b style="color:var(--gold)">${pas.name}:</b> ${pas.desc}</div>` : ''}
         <div class="rec" style="margin:4px 0 8px">📍 ${e.name}: ${e.blurb}</div>
-        <div class="row"><span class="rec grow">${left ? `Win ≈ ${battleReward('win', my, rr)} · Loss ${battleReward('loss', my, rr)} BIO` : 'Unrated'}</span><button class="btn small" data-fight="${i}">Fight</button></div>
+        <div class="row"><span class="rec grow">${left ? `Win ≈ ${battleReward('win', my, rr) * mult}${mult > 1 ? ' (×' + mult + ')' : ''} · Loss ${battleReward('loss', my, rr)} BIO` : 'Unrated'}</span><button class="btn small" data-fight="${i}">Fight</button></div>
       </div>`;
     }).join('')}
-    <p class="rec" style="margin-top:6px">Wild Kaiju fill in when there aren't enough players near your Elo. They move your Elo at half rate.</p>
+    <p class="rec" style="margin-top:6px">One opponent is always a Wild Kaiju (others are real players near your Elo when available). Wild fights move your Elo at half rate.</p>
     <button class="btn ghost small" id="reroll" ${me.player.bio < 15 ? 'disabled' : ''}>New opponents (15 BIO)</button>
     <h3>Friendly sparring</h3>
     <p class="sub">Paste a friend's Kaiju code (KJ1…) for an unrated match, or a replay code (KR1…) to watch.</p>
@@ -380,14 +389,27 @@ async function arena() {
   };
 }
 
+// The fight response already contains the post-fight state (Biomass, Elo, injuries, deaths).
+// Hold it back until the battle finishes playing, so the top bar doesn't spoil the result.
+let pendingBoot = null;
+function applyPendingBoot() {
+  if (!pendingBoot) return;
+  applyBoot(pendingBoot); pendingBoot = null;
+}
+
 async function rankedFight(slot) {
-  const r = await act('fight', { slot }, { rerender: false });
+  panel.classList.add('busy');
+  let r = null;
+  try { r = await api.call('fight', { slot }); }
+  catch (e) { toast(e.message); if (e.status === 401) { me = null; go('auth'); return; } }
+  finally { panel.classList.remove('busy'); }
   offers = null;
   if (!r) { if (screen === 'arena') arena(); return; }
+  pendingBoot = r;
   // The server sent no events. Re-simulate locally and confirm we got the exact same fight.
   const { ok, stale, record } = verifyReplay(r.battle);
   if (stale) toast(`Server is on engine v${r.battle.v}, this page is v${ENGINE_VERSION}. Reload to update.`);
-  showBattle(record, { result: r.result, reward: r.reward, elo: r.eloDelta, rated: r.rated, verified: ok, battleId: r.battle.id, aftermath: r.aftermath, salvage: r.salvage, mySide: 0 });
+  showBattle(record, { result: r.result, reward: r.reward, elo: r.eloDelta, rated: r.rated, verified: ok, battleId: r.battle.id, aftermath: r.aftermath, salvage: r.salvage, mySide: 0, rare: r.opponentKind === 'rare' });
 }
 
 function spar(opp, env) {
@@ -482,7 +504,7 @@ function defenseReport() {
 }
 
 // ---------- Battle playback ----------
-function showBattle(record, { result, reward, elo, rated, replay, friendly, verified, battleId, aftermath, salvage, mySide = null } = {}) {
+function showBattle(record, { result, reward, elo, rated, replay, friendly, verified, battleId, aftermath, salvage, mySide = null, rare = false } = {}) {
   if (playing) { playing.stop(); playing = null; }
   panel.hidden = true; hud.hidden = false; modal.hidden = true;
   const env = ENV_BY_ID[record.env];
@@ -533,11 +555,13 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
       case 'selfdmg': hp[ev.a] = ev.hp; draw(ev.a); break;
       case 'skip': log(`${name(ev.a)} is ${ev.reason === 'stun' ? 'stunned' : 'held fast'} and can't act`); break;
       case 'hazard': callout(ev.name, '#ffb347'); for (const h of ev.hits) { hp[h.tg] = h.hp; draw(h.tg); log(`<b style="color:#ffb347">${esc(ev.name)}</b> hits ${name(h.tg)} for ${h.dmg}`); } break;
+      case 'passive': callout(ev.name, '#ffd23f'); log(`<b style="color:#ffd23f">${name(ev.tg)}: ${esc(ev.name)}</b>${ev.resisted ? ` (shrugs off ${STATUSES[ev.resisted].name.toLowerCase()})` : ''}`); break;
       case 'ko': callout('K.O.!', '#ff3a2a'); log(`<b>${name(ev.tg)} is down!</b>`); break;
     }
   };
   const onDone = () => {
     setTimeout(() => {
+      applyPendingBoot();   // reveal Biomass/Elo only now, together with the result
       const w = record.winner;
       const big = replay ? (w === null ? 'DRAW' : `${record.fighters[w].name} WINS`) : ({ win: 'VICTORY', loss: 'DEFEAT', draw: 'DRAW' })[result];
       const sub = friendly ? 'Friendly · unrated' : replay ? 'Replay' : rated === false ? 'Unrated (daily limit reached)' : 'Ranked';
@@ -545,6 +569,7 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
         <div class="big" style="color:${result === 'loss' ? 'var(--bad)' : result === 'win' ? 'var(--good)' : '#fff'}">${esc(big)}</div>
         <div class="rec">${sub} · ${record.reason === 'ko' ? 'Knockout' : record.reason === 'decision' ? 'Time: decision on remaining HP' : 'Double knockout'} · ${record.turns} actions</div>
         ${verified !== undefined ? `<div class="${verified ? 'verified' : 'l'}" style="font-size:11px;margin-top:4px">${verified ? '✓ Re-simulated locally: identical to the server result' : '⚠ Local re-simulation did not match'}</div>` : ''}
+        ${rare && result === 'win' ? `<div class="rarebanner" style="margin-top:10px">★ Trophy: ${FRAME_BY_ID[record.fighters[1].frame].name} defeated (×${RARE_REWARD_MULT} Biomass)</div>` : ''}
         ${aftermathHtml(aftermath, record.fighters, { mySide })}
         ${salvage ? `<div class="rec">Salvaged <b style="color:var(--gold)">${salvage} BIO</b> from the remains.</div>` : ''}
         ${reward || elo ? `<div class="reward">${reward ? `+${reward} Biomass` : ''}${elo ? ` <span class="${elo > 0 ? 'delta-up' : 'delta-dn'}" style="font-size:22px">${elo > 0 ? '+' : ''}${elo} Elo</span>` : ''}</div>` : '<div style="height:18px"></div>'}

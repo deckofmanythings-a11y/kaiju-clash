@@ -5,10 +5,10 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { simulateBattle, sanitizeSnapshot, ENGINE_VERSION } from '../_shared/kaiju/engine/battle.js';
 import { createRng, randomSeed } from '../_shared/kaiju/engine/rng.js';
-import { FRAME_BY_ID, STATS, MAX_STAT_LEVEL } from '../_shared/kaiju/data/frames.js';
+import { FRAME_BY_ID, STATS, MAX_STAT_LEVEL, RARE_FRAME_IDS } from '../_shared/kaiju/data/frames.js';
 import { ABILITY_BY_ID, MAX_EQUIPPED, abilityAvailableTo } from '../_shared/kaiju/data/abilities.js';
 import { ENVIRONMENTS } from '../_shared/kaiju/data/environments.js';
-import { statUpgradeCost, powerRating, battleReward, generateRival } from '../_shared/kaiju/data/economy.js';
+import { statUpgradeCost, powerRating, battleReward, generateRival, pickRare, RARE_CHANCE, RARE_POWER_PCT, RARE_REWARD_MULT } from '../_shared/kaiju/data/economy.js';
 import { INJURY_BY_ID, HEAL_HOURS, healCost } from '../_shared/kaiju/data/injuries.js';
 import { rollAftermath } from '../_shared/kaiju/engine/aftermath.js';
 
@@ -125,28 +125,36 @@ async function ensureOffers(uid: string, player: any, k: Kaiju, force = false) {
   for (const win of [150, 350, 800, 5000]) {
     pool = must(await db.from('kb_kaiju').select('*').neq('owner', uid).eq('retired', false)
       .gte('elo', k.elo - win).lte('elo', k.elo + win).limit(60), 'opponents') as Kaiju[];
-    if (pool.length >= 3) break;
+    if (pool.length >= 2) break;
   }
   pool.sort((a, b) => (a.elo - b.elo) || a.id.localeCompare(b.id));
   const picks: (Kaiju | null)[] = [];
   const used = new Set<string>(), usedOwners = new Set<string>();
-  for (let tries = 0; picks.length < 3 && tries < 40 && pool.length; tries++) {
+  // At most 2 real players: one slot is always a Wild Kaiju (sometimes a rare one).
+  for (let tries = 0; picks.length < 2 && tries < 40 && pool.length; tries++) {
     const c = pool[rng.int(pool.length)];
     if (used.has(c.id) || (usedOwners.has(c.owner) && pool.length > 3)) continue;
     used.add(c.id); usedOwners.add(c.owner); picks.push(c);
   }
-  while (picks.length < 3) picks.push(null);
   picks.sort((a, b) => (a ? a.elo : 0) - (b ? b.elo : 0));
+  // Players stay in Elo order; the guaranteed Wild slot lands at a random position (so its difficulty varies).
+  picks.splice(rng.int(picks.length + 1), 0, null);
+  while (picks.length < 3) picks.push(null);
 
   const myPower = powerRating(k);
-  const rows = picks.map((opp, slot) => ({
+  const rows = picks.map((opp, slot) => {
+    // Wild slots occasionally roll a rare Wild-only enemy instead.
+    const rare = !opp && rng.int(100) < RARE_CHANCE ? pickRare(rng) : null;
+    const base = Math.floor((myPower * [85, 100, 120][slot]) / 100);
+    return {
     user_id: uid, slot, kaiju_id: k.id,
     opponent: opp ? opp.id : null,
     rival_seed: opp ? null : (rng.next() >>> 0),
-    rival_rating: opp ? null : Math.floor((myPower * [85, 100, 120][slot]) / 100),
+    rival_rating: opp ? null : (rare ? Math.floor((base * RARE_POWER_PCT) / 100) : base),
+    rival_frame: rare,
     env: rng.pick(ENVIRONMENTS).id,
     created_at: new Date().toISOString(),
-  }));
+  }; });
   must(await db.from('kb_offers').delete().eq('user_id', uid), 'clear offers');
   must(await db.from('kb_offers').insert(rows), 'save offers');
   return rows;
@@ -159,8 +167,8 @@ async function describeOffers(offers: any[], me: Kaiju) {
   return offers.map(o => {
     const opp = opps.find(x => x.id === o.opponent);
     if (opp) return { slot: o.slot, env: o.env, kind: 'player', elo: opp.elo, record: [opp.wins, opp.losses, opp.draws], snapshot: snapshot(opp, owners[opp.owner]) };
-    const rv = generateRival(Number(o.rival_seed), o.rival_rating);
-    return { slot: o.slot, env: o.env, kind: 'wild', elo: me.elo + [-100, 0, 120][o.slot], snapshot: rv };
+    const rv = generateRival(Number(o.rival_seed), o.rival_rating, o.rival_frame);
+    return { slot: o.slot, env: o.env, kind: o.rival_frame ? 'rare' : 'wild', elo: me.elo + [-100, 0, 120][o.slot], snapshot: rv };
   });
 }
 async function ownerNames(ids: string[]) {
@@ -189,6 +197,9 @@ async function bootstrap(uid: string) {
     player: { name: player.display_name, bio: player.bio, active: active?.id || null,
       fightsToday: player.fights_day === utcDay() ? player.fights_today : 0, ratedPerDay: RATED_FIGHTS_PER_DAY },
     kaiju, defenses, engine: ENGINE_VERSION,
+    trophies: Object.entries((must(await db.from('kb_battles').select('rare:fighters->1->>frame')
+      .eq('attacker_owner', uid).eq('winner', 0).is('defender_kaiju', null).in('fighters->1->>frame', RARE_FRAME_IDS).limit(2000), 'trophies') as any[])
+      .reduce((acc: Record<string, number>, r) => { acc[r.rare] = (acc[r.rare] || 0) + 1; return acc; }, {})),
     fallen: must(await db.from('kb_kaiju').select('id, name, frame, levels, abilities, colors, injuries, wins, losses, elo, died_at, death')
       .eq('owner', uid).not('died_at', 'is', null).order('died_at', { ascending: false }).limit(20), 'fallen'),
   };
@@ -209,7 +220,7 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
   async create_kaiju(uid, b) {
     await requirePlayer(uid);
     const frame = FRAME_BY_ID[b.frame];
-    if (!frame) throw new Fail('Unknown frame.');
+    if (!frame || frame.wildOnly) throw new Fail('Unknown frame.');
     if ((await myKaiju(uid)).length >= MAX_KAIJU) throw new Fail(`Max ${MAX_KAIJU} Kaiju. Release one first.`);
     const name = cleanName(b.name, 24) || frame.name;
     const starter = frame.exclusive[0];
@@ -305,7 +316,7 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
       oppSnap = snapshot(opp, oppOwnerName);
       oppElo = opp.elo;
     } else {
-      oppSnap = generateRival(Number(offer.rival_seed), offer.rival_rating);
+      oppSnap = generateRival(Number(offer.rival_seed), offer.rival_rating, offer.rival_frame);
       oppElo = k.elo + [-100, 0, 120][slot];
     }
 
@@ -315,7 +326,8 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
     const score = result === 'win' ? 1 : result === 'loss' ? 0 : 0.5;
     const fightsToday = player.fights_day === utcDay() ? player.fights_today : 0;
     const rated = fightsToday < RATED_FIGHTS_PER_DAY;
-    const reward = rated ? battleReward(result, powerRating(k), powerRating(record.fighters[1])) : 0;
+    const rareWin = !!offer.rival_frame && result === 'win';
+    const reward = rated ? battleReward(result, powerRating(k), powerRating(record.fighters[1])) * (rareWin ? RARE_REWARD_MULT : 1) : 0;
     const deltaA = rated ? eloDelta(k.elo, oppElo, score, opp ? K_PVP : K_WILD) : 0;
     const deltaD = rated && opp ? -eloDelta(k.elo, oppElo, score, K_PVP) : 0;
     const defReward = rated && opp && result === 'loss' ? DEFENSE_WIN_BIO : 0;
@@ -342,7 +354,7 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
     return {
       battle: { id: battleId, v: record.v, seed, env: record.env, fighters: record.fighters, winner: record.winner,
         reason: record.reason, turns: record.turns, hash: record.hash },
-      result, rated, reward, eloDelta: deltaA, opponentKind: opp ? 'player' : 'wild', aftermath, salvage,
+      result, rated, reward, eloDelta: deltaA, opponentKind: opp ? 'player' : offer.rival_frame ? 'rare' : 'wild', aftermath, salvage,
       ...(await bootstrap(uid)),
     };
   },

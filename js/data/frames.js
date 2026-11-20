@@ -139,7 +139,61 @@ export const FRAMES = [
   },
 ];
 
-export const FRAME_BY_ID = Object.fromEntries(FRAMES.map(f => [f.id, f]));
+// ---------- Rare Wild-only enemies ----------
+// Never playable. They only show up as rare Wild encounters in the Arena. Each has a unique
+// passive trait that the battle engine implements (see PASSIVES).
+export const PASSIVES = {
+  last_stand:     { name: 'Heroic Resolve',       desc: 'The first blow that would defeat it leaves it at 1 HP instead, and it becomes Enraged.' },
+  tag_team:       { name: 'Tag Team',             desc: 'The first time it drops below 50% HP, a fresh member tags in: heals 30% and clears debuffs.' },
+  swarm:          { name: 'Overwhelming Numbers', desc: 'Too many units to pin down: immune to Stun and Bound.' },
+  transformation: { name: 'Transformation',       desc: 'The first time it drops below 50% HP, it transforms: clears debuffs, full energy, Shielded, Charged and Hasted.' },
+};
+
+export const WILD_FRAMES = [
+  {
+    id: 'superhero', name: 'Superhero', plan: 'hero', wildOnly: true, rarity: 30,
+    blurb: 'A caped champion of humanity, tiny next to a Kaiju but hits like a freight train. Refuses to stay down.',
+    tags: ['human', 'hero', 'flyer'], passive: 'last_stand',
+    base: { hp: 880, pow: 16, enr: 14, arm: 11, spd: 14, fcs: 12 },
+    growth: { hp: 85, pow: 3, enr: 2, arm: 1, spd: 2, fcs: 1 },
+    resist: { physical: 85, acid: 120 },
+    basic: 'hero_punch', exclusive: ['heat_vision', 'hurricane_spin', 'heroic_charge'],
+    colors: { body: '#1d3fa8', belly: '#c8102e', accent: '#ffd23f' },
+  },
+  {
+    id: 'heroteam', name: 'Superhero Team', plan: 'heroteam', wildOnly: true, rarity: 10,
+    blurb: 'Five human-sized heroes fighting as one. Coordinated strikes, and someone always tags in.',
+    tags: ['human', 'hero'], passive: 'tag_team',
+    base: { hp: 1000, pow: 16, enr: 16, arm: 11, spd: 13, fcs: 14 },
+    growth: { hp: 90, pow: 2, enr: 2, arm: 1, spd: 1, fcs: 2 },
+    resist: {},
+    basic: 'team_strike', exclusive: ['combo_formation', 'shield_wall', 'combined_beam'],
+    colors: { body: '#2b2d42', belly: '#edf2f4', accent: '#ef233c' },
+  },
+  {
+    id: 'army', name: 'Army', plan: 'army', wildOnly: true, rarity: 35,
+    blurb: 'Tanks, artillery and jets. Endless firepower, impossible to pin down.',
+    tags: ['human', 'mech', 'armored'], passive: 'swarm',
+    base: { hp: 1300, pow: 17, enr: 16, arm: 18, spd: 8, fcs: 14 },
+    growth: { hp: 95, pow: 2, enr: 2, arm: 2, spd: 1, fcs: 1 },
+    resist: { physical: 90, acid: 110, electric: 120 },
+    basic: 'rifle_volley', exclusive: ['artillery_barrage', 'air_strike', 'tank_column'],
+    colors: { body: '#4b5320', belly: '#8a8d6b', accent: '#ff8c1a' },
+  },
+  {
+    id: 'magicalgirl', name: 'Magical Girl', plan: 'magicalgirl', wildOnly: true, rarity: 25,
+    blurb: "Human-sized and sparkly, she barely reaches a Kaiju's ankle. Fragile at first, terrifying once she transforms.",
+    tags: ['human', 'magical', 'flyer'], passive: 'transformation',
+    base: { hp: 840, pow: 11, enr: 17, arm: 9, spd: 14, fcs: 13 },
+    growth: { hp: 75, pow: 1, enr: 3, arm: 1, spd: 2, fcs: 2 },
+    resist: { electric: 70, sonic: 70, acid: 130 },
+    basic: 'wand_bolt', exclusive: ['starlight_beam', 'ribbon_bind', 'heart_barrier'],
+    colors: { body: '#ff8fc7', belly: '#ffffff', accent: '#8ef6ff' },
+  },
+];
+export const RARE_FRAME_IDS = WILD_FRAMES.map(f => f.id);
+
+export const FRAME_BY_ID = Object.fromEntries([...FRAMES, ...WILD_FRAMES].map(f => [f.id, f]));
 
 export function effectiveStats(kaiju) {
   const f = FRAME_BY_ID[kaiju.frame];

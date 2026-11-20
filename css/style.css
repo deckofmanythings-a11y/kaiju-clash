@@ -164,3 +164,13 @@ input[type=color] { width: 38px; height: 30px; border: 1px solid var(--line); ba
 .dialog .inj { font-size: 13px; margin: 6px 0; color: #fca5a5; }
 .card.fallen { filter: grayscale(.8); opacity: .85; }
 .card.fallen.sel { filter: none; opacity: 1; border-color: #6b7280; }
+
+/* ---------- Rare encounters ---------- */
+.tag.rare { background: linear-gradient(90deg, #ffd23f, #ff8fc7); color: #1a1022; font-weight: 800; }
+.card.rarecard { border-color: rgba(255,210,63,.6); background: linear-gradient(135deg, rgba(255,210,63,.10), rgba(255,143,199,.08)); box-shadow: 0 0 18px rgba(255,210,63,.15); }
+.rarebanner { font: 16px/1.2 'Bebas Neue', sans-serif; letter-spacing: 1px; color: #ffd23f; margin-bottom: 4px; }
+.trophies { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.trophy { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 4px; text-align: center; color: var(--muted); }
+.trophy b { display: block; font: 22px/1 'Bebas Neue', sans-serif; }
+.trophy span { font-size: 10px; }
+.trophy.got { border: 1px solid rgba(255,210,63,.6); color: #ffd23f; background: rgba(255,210,63,.07); }

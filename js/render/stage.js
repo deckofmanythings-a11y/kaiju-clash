@@ -32,8 +32,9 @@ function makeDirector(camera) {
     const h = rig.height, r = Math.max(rig.radius, h * 0.6);
     d.mode = 'showcase';
     d.target.set(0, model.position.y + h * 0.48, 0);
-    d.radius = Math.max(16, r * 1.8 + h * 1.0);
-    d.height = rig.hover ? h * 0.9 + 6 : h * 0.45 + 4;
+    const tiny = !!rig.extra?.tiny; // human-scale wild fighters: zoom to fit instead of the kaiju minimum
+    d.radius = Math.max(tiny ? 3 : 16, r * 1.8 + h * 1.0);
+    d.height = tiny ? h * 0.35 + 0.6 : rig.hover ? h * 0.9 + 6 : h * 0.45 + 4;
     d.baseAngle = 0.55; d.orbitAmp = 0.12; d.orbitSpeed = 0.2;
     d.focusLeft = 0; d.snapNext = true;
   };
@@ -209,7 +210,8 @@ export function createStage(canvas, opts = {}) {
     t += dt;
     if (stage.arena) stage.arena.update(dt, t);
     if (stage.showcaseModel) {
-      stage.showcaseModel.rotation.y += dt * 0.35;
+      // memorial statues turn very slowly
+      stage.showcaseModel.rotation.y += dt * (stage.showcaseModel.userData.rig?.fallen ? 0.06 : 0.35);
       stage.showcaseModel.userData.rig.update(dt, t);
     }
     for (const f of stage.fighters) if (f) f.userData.rig.update(dt, t);

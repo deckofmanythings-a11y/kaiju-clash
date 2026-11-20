@@ -46,6 +46,13 @@
     <div class="row" style="margin-top:4px"><button id="lv0">All 0</button><button id="lv3">Tier 1</button><button id="lv6">Tier 2</button><button id="lv9">Tier 3</button></div>
     <h2>Abilities (A)</h2>
     <div id="abil" class="abil"></div>
+    <h2>Injuries (A)</h2>
+    <div id="inj" class="abil"></div>
+    <div class="row" style="margin-top:4px"><button id="injNone">None</button><button id="injAll">All</button></div>
+    <div id="cond" style="margin:4px 0;font-weight:700">Healthy</div>
+    <label><input type="checkbox" id="fallen"> Fallen (memorial statue)</label>
+    <button id="btnWalk">Walk: off</button>
+    <button id="btnGalInj">Gallery w/ injuries</button>
     <h2>Fighter B</h2>
     <select id="frameB"></select>
     <label><input type="checkbox" id="bSame" checked> B uses A's levels</label>
@@ -80,6 +87,7 @@ import { playBattle } from './playback.js';
 import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES } from '../data/frames.js';
 import { ABILITY_BY_ID, abilitiesForFrame } from '../data/abilities.js';
 import { ENVIRONMENTS } from '../data/environments.js';
+import { INJURIES, conditionOf } from '../data/injuries.js';
 
 const $ = (s) => document.querySelector(s);
 const errBox = $('#err');
@@ -89,6 +97,8 @@ window.addEventListener('unhandledrejection', e => { errBox.textContent += 'Prom
 const stage = createStage($('#stage'));
 const levels = Object.fromEntries(STATS.map(s => [s, 0]));
 let equipped = new Set();
+const injured = new Set();
+let walkOn = false;
 let gallery = [], galleryTicker = null, playing = null;
 
 // ---- UI
@@ -115,7 +125,25 @@ $('#frameB').onchange = () => refresh();
 $('#bSame').onchange = () => refresh();
 $('#env').onchange = () => { stage.setEnvironment($('#env').value); };
 
-function snapA() { const f = FRAME_BY_ID[$('#frameA').value]; return { id: 'A-' + f.id, name: f.name, frame: f.id, levels: { ...levels }, abilities: [...equipped], colors: { ...f.colors } }; }
+// ---- injuries / fallen
+$('#inj').innerHTML = INJURIES.map(i => `<label><input type="checkbox" value="${i.id}"> ${i.name} <small>${i.part} / ${i.severity > 1 ? 'MAJOR' : 'minor'}</small></label>`).join('');
+function syncInjuryUI() {
+  for (const cb of document.querySelectorAll('#inj input')) cb.checked = injured.has(cb.value);
+  const c = conditionOf([...injured]);
+  $('#cond').textContent = `${c.name} (severity ${c.severity})`; $('#cond').style.color = c.color;
+}
+$('#inj').addEventListener('change', e => { if (e.target.checked) injured.add(e.target.value); else injured.delete(e.target.value); syncInjuryUI(); refresh(); });
+$('#injNone').onclick = () => { injured.clear(); syncInjuryUI(); refresh(); };
+$('#injAll').onclick = () => { INJURIES.forEach(i => injured.add(i.id)); syncInjuryUI(); refresh(); };
+$('#fallen').onchange = () => refresh();
+$('#btnWalk').onclick = () => { walkOn = !walkOn; $('#btnWalk').textContent = 'Walk: ' + (walkOn ? 'on' : 'off'); };
+stage.addTicker(() => {
+  const all = [stage.showcaseModel, ...gallery].filter(Boolean);
+  for (const m of all) { const a = m.userData.rig?.anim; if (a) a.walk = walkOn ? 1 : 0; }
+});
+syncInjuryUI();
+
+function snapA() { const f = FRAME_BY_ID[$('#frameA').value]; return { id: 'A-' + f.id, name: f.name, frame: f.id, levels: { ...levels }, abilities: [...equipped], colors: { ...f.colors }, injuries: [...injured], fallen: $('#fallen').checked }; }
 function snapB() {
   const f = FRAME_BY_ID[$('#frameB').value];
   const ex = f.exclusive.slice();
@@ -132,13 +160,14 @@ function clearGallery() {
 function refresh() {
   if (mode === 'show') showcase();
   else if (mode === 'pair') faceOff();
-  else if (mode === 'gallery') showGallery();
+  else if (mode === 'gallery') showGallery(galleryLv, galleryInj);
 }
 function stopPlaying() { if (playing) { playing.stop(); playing = null; } }
 function showcase() { stopPlaying(); clearGallery(); mode = 'show'; stage.showcase(snapA()); }
 function faceOff() { stopPlaying(); clearGallery(); mode = 'pair'; stage.setFighters(snapA(), snapB()); }
-function showGallery(lv) {
-  stopPlaying(); clearGallery(); mode = 'gallery';
+let galleryLv, galleryInj = false;
+function showGallery(lv, withInj = false) {
+  stopPlaying(); clearGallery(); mode = 'gallery'; galleryLv = lv; galleryInj = withInj;
   stage.setFighters({ frame: 'saurian' }, { frame: 'saurian' });
   // hide fighters for the gallery
   for (const f of stage.fighters) f.visible = false;
@@ -147,7 +176,8 @@ function showGallery(lv) {
   FRAMES.forEach((f, i) => {
     const vis = abilitiesForFrame(f).filter(a => a.vis).map(a => a.id);
     const lvls = lv != null ? Object.fromEntries(STATS.map(s => [s, lv])) : { ...levels };
-    const m = buildKaijuModel({ id: 'g' + f.id, name: f.name, frame: f.id, levels: lvls, abilities: lv >= 9 ? vis.slice(0, 3) : [], colors: f.colors });
+    const extra = withInj ? { injuries: [...injured], fallen: $('#fallen').checked } : {};
+    const m = buildKaijuModel({ id: 'g' + f.id, name: f.name, frame: f.id, levels: lvls, abilities: lv >= 9 ? vis.slice(0, 3) : [], colors: f.colors, ...extra });
     const c = i % cols, r = Math.floor(i / cols);
     m.position.set((c - (cols - 1) / 2) * gapX, y, (r - 1) * gapZ);
     m.rotation.y = 0.7;
@@ -160,6 +190,7 @@ function showGallery(lv) {
 $('#btnShow').onclick = showcase;
 $('#btnPair').onclick = faceOff;
 $('#btnGallery').onclick = () => showGallery();
+$('#btnGalInj').onclick = () => showGallery(undefined, true);
 
 // ---- fake battle covering every event type and fx kind
 function makeFakeRecord(A, B, env) {
@@ -246,7 +277,10 @@ showcase();
 // automation hooks for screenshots
 window.__kb = { stage, THREE, buildKaijuModel, showcase, faceOff, showGallery, playFake, setAll, levels, equipped, FRAMES,
   pick(frame, lv, abil) { $('#frameA').value = frame; renderAbilities(); if (abil) { equipped.clear(); abil.forEach(a => equipped.add(a)); } setAll(lv); },
-  env(id) { $('#env').value = id; stage.setEnvironment(id); } };
+  env(id) { $('#env').value = id; stage.setEnvironment(id); },
+  inj(ids = [], fallen = false) { injured.clear(); ids.forEach(i => injured.add(i)); $('#fallen').checked = !!fallen; syncInjuryUI(); refresh(); },
+  walk(on) { walkOn = !!on; $('#btnWalk').textContent = 'Walk: ' + (walkOn ? 'on' : 'off'); },
+  frame(id) { $('#frameA').value = id; renderAbilities(); refresh(); } };
 </script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 // Biomass (BIO) economy.
-import { STATS, MAX_STAT_LEVEL, FRAMES, FRAME_BY_ID } from './frames.js';
+import { STATS, MAX_STAT_LEVEL, FRAMES, FRAME_BY_ID, WILD_FRAMES } from './frames.js';
 import { ABILITY_BY_ID, abilitiesForFrame, MAX_EQUIPPED } from './abilities.js';
 import { ENVIRONMENTS } from './environments.js';
 import { createRng } from '../engine/rng.js';
@@ -34,10 +34,29 @@ function hslHex(h, s, l) {
   return '#' + f(0) + f(8) + f(4);
 }
 
-// Deterministic rival with roughly `rating` power. Same (seed, rating) => same rival.
-export function generateRival(seed, rating) {
+// ---------- Rare Wild encounters ----------
+export const RARE_CHANCE = 6;          // % chance each Wild slot is a rare encounter
+export const RARE_POWER_PCT = 110;     // % of the slot's rating (tuned: rares win ~57-66%, see test/rare-balance.mjs)
+export const RARE_REWARD_MULT = 2;     // Biomass multiplier for beating one
+const RARE_NAMES = {
+  superhero: ['Captain Dawnstrike', 'The Crimson Comet', 'Ironheart', 'Major Valor', 'Skyguard', 'The Paragon'],
+  heroteam: ['The Vanguard Five', 'Aegis Squadron', 'The Dawn Legion', 'Team Bulwark', 'The Sentinel Corps'],
+  army: ['7th Armored Division', 'Task Force Hammer', 'Iron Rain Battalion', 'Operation Last Line', 'Joint Strike Group Kilo'],
+  magicalgirl: ['Magical Girl Stellar Lumi', 'Starlight Mirai', 'Pretty Guardian Hoshi', 'Miracle Ribbon Aiko', 'Comet Princess Yuna'],
+};
+// Weighted pick of a rare frame id (weights = frame.rarity).
+export function pickRare(rng) {
+  let total = 0; for (const f of WILD_FRAMES) total += f.rarity;
+  let r = rng.int(total);
+  for (const f of WILD_FRAMES) { if (r < f.rarity) return f.id; r -= f.rarity; }
+  return WILD_FRAMES[0].id;
+}
+
+// Deterministic rival with roughly `rating` power. Same (seed, rating, frame) => same rival.
+// Pass a rare frame id to build a rare Wild-only enemy instead of a random Kaiju.
+export function generateRival(seed, rating, forceFrame = null) {
   const rng = createRng(seed);
-  const frame = rng.pick(FRAMES);
+  const frame = forceFrame && FRAME_BY_ID[forceFrame] ? FRAME_BY_ID[forceFrame] : rng.pick(FRAMES);
   const levels = Object.fromEntries(STATS.map(s => [s, 0]));
   const pool = abilitiesForFrame(frame);
   const abilities = [frame.exclusive[0]];
@@ -58,6 +77,12 @@ export function generateRival(seed, rating) {
     while (r >= weights[idx]) { r -= weights[idx]; idx++; }
     const s = STATS[idx];
     if (levels[s] < MAX_STAT_LEVEL) { levels[s]++; budget -= 10; }
+  }
+  if (frame.wildOnly) {
+    return {
+      id: 'rare-' + seed, name: rng.pick(RARE_NAMES[frame.id] || [frame.name]), frame: frame.id, levels, abilities,
+      colors: { ...frame.colors }, owner: 'Defenders of Humanity', rare: true,
+    };
   }
   const hue = rng.int(360);
   const name = rng.pick(NAME_A) + rng.pick(NAME_B);

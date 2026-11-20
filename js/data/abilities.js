@@ -167,6 +167,36 @@ const A = [
   { id: 'storm_call',    name: 'Storm Call',    frames: ['stormray'], kind: 'attack', type: 'electric', stat: 'enr', power: 190, acc: 85, cost: 55, cd: 4, fx: 'aoe', price: 400 },
   { id: 'static_field',  name: 'Static Field',  frames: ['stormray'], kind: 'buff', cost: 25, cd: 4, fx: 'shield', price: 250,
     selfEffects: [{ status: 'shield', chance: 100, turns: 3, power: 12 }, { status: 'charged', chance: 100, turns: 3 }] },
+
+  // ---------- Rare Wild-only enemies ----------
+  { id: 'hero_punch',     name: 'Hero Punch',       basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 105, acc: 96, fx: 'melee' },
+  { id: 'heat_vision',    name: 'Heat Vision',      frames: ['superhero'], kind: 'attack', type: 'fire', stat: 'enr', power: 190, acc: 96, cost: 45, cd: 3, fx: 'beam', price: 300,
+    effects: [{ status: 'burn', chance: 40, turns: 2, power: 40 }] },
+  { id: 'hurricane_spin', name: 'Hurricane Spin',   frames: ['superhero'], kind: 'attack', type: 'physical', stat: 'spd', power: 60, hits: 4, acc: 90, cost: 35, cd: 3, fx: 'multi', price: 300,
+    effects: [{ status: 'blind', chance: 40, turns: 2 }] },
+  { id: 'heroic_charge',  name: 'Heroic Charge',    frames: ['superhero'], kind: 'attack', type: 'physical', stat: 'pow', power: 210, acc: 85, cost: 50, cd: 4, fx: 'melee', price: 300,
+    effects: [{ status: 'stun', chance: 30, turns: 1 }] },
+
+  { id: 'team_strike',     name: 'Team Strike',     basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 55, hits: 2, acc: 95, fx: 'multi' },
+  { id: 'combo_formation', name: 'Combo Formation', frames: ['heroteam'], kind: 'attack', type: 'physical', stat: 'pow', power: 50, hits: 5, acc: 90, cost: 40, cd: 3, fx: 'multi', price: 300 },
+  { id: 'shield_wall',     name: 'Shield Wall',     frames: ['heroteam'], kind: 'buff', cost: 25, cd: 4, fx: 'shield', price: 300,
+    selfEffects: [{ status: 'shield', chance: 100, turns: 3, power: 14 }, { status: 'fortify', chance: 100, turns: 2 }] },
+  { id: 'combined_beam',   name: 'Combined Beam',   frames: ['heroteam'], kind: 'attack', type: 'electric', stat: 'enr', power: 230, acc: 90, cost: 60, cd: 4, fx: 'beam', price: 300 },
+
+  { id: 'rifle_volley',      name: 'Rifle Volley',      basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 36, hits: 3, acc: 92, fx: 'projectile' },
+  { id: 'artillery_barrage', name: 'Artillery Barrage', frames: ['army'], kind: 'attack', type: 'fire', stat: 'enr', power: 48, hits: 5, acc: 85, cost: 40, cd: 3, fx: 'projectile', price: 300,
+    effects: [{ status: 'burn', chance: 50, turns: 2, power: 35 }] },
+  { id: 'air_strike',        name: 'Air Strike',        frames: ['army'], kind: 'attack', type: 'fire', stat: 'enr', power: 200, acc: 88, cost: 50, cd: 4, fx: 'aoe', price: 300,
+    effects: [{ status: 'sunder', chance: 50, turns: 2 }] },
+  { id: 'tank_column',       name: 'Tank Column',       frames: ['army'], kind: 'attack', type: 'physical', stat: 'arm', power: 150, acc: 90, cost: 30, cd: 2, fx: 'projectile', price: 300,
+    effects: [{ status: 'slow', chance: 50, turns: 2 }] },
+
+  { id: 'wand_bolt',      name: 'Sparkle Bolt',     basic: true, kind: 'attack', type: 'electric', stat: 'enr', power: 95, acc: 97, fx: 'projectile' },
+  { id: 'starlight_beam', name: 'Starlight Beam',   frames: ['magicalgirl'], kind: 'attack', type: 'electric', stat: 'enr', power: 220, acc: 94, cost: 55, cd: 3, fx: 'beam', price: 300 },
+  { id: 'ribbon_bind',    name: 'Ribbon Bind',      frames: ['magicalgirl'], kind: 'debuff', cost: 25, cd: 4, acc: 95, fx: 'grab', price: 300,
+    effects: [{ status: 'bind', chance: 85, turns: 2 }, { status: 'weaken', chance: 60, turns: 2 }] },
+  { id: 'heart_barrier',  name: 'Heart Barrier',    frames: ['magicalgirl'], kind: 'buff', cost: 25, cd: 4, fx: 'shield', price: 300,
+    selfEffects: [{ status: 'shield', chance: 100, turns: 3, power: 12 }, { status: 'regen', chance: 100, turns: 3, power: 4 }] },
 ];
 
 export const ABILITIES = A;
