@@ -3,6 +3,8 @@
 // createStage(canvas, opts?) -> {
 //   scene, camera, renderer, fighters: [modelA, modelB], arena, envId, director,
 //   setEnvironment(envId), showcase(snapshot), setFighters(snapA, snapB), resize(), dispose(),
+//   preload(snapshots) -> Promise (lazy GLB models; await it before setFighters so a battle never starts on the
+//   procedural fallback), whenReady() -> Promise (pending showcase load),
 //   addTicker(fn(dt, t)) -> remove, homes: [Vector3, Vector3]
 // }
 
@@ -12,7 +14,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { buildKaijuModel, disposeObject } from './kaiju-model.js';
+import { buildKaijuModel, disposeObject, preloadKaijuModels, kaijuModelsReady } from './kaiju-model.js';
 import { buildArena } from './arena.js';
 
 const V3 = THREE.Vector3;
@@ -165,7 +167,23 @@ export function createStage(canvas, opts = {}) {
     stage._snaps = [null, null];
   };
 
+  // GLB models load lazily, per frame. preload() resolves once the given snapshots' models can be built (it never
+  // rejects: a frame that fails to load uses its procedural plan).
+  stage.preload = (snaps) => preloadKaijuModels(snaps);
+  let showReq = 0, showPending = Promise.resolve();
+  stage.whenReady = () => showPending;
+
+  // Synchronous when the frame's model is already cached. Otherwise the current model stays up while the GLB
+  // loads and is swapped once it is in (a newer showcase / setFighters call cancels the swap); returns null then.
   stage.showcase = (snapshot) => {
+    const req = ++showReq;
+    if (!kaijuModelsReady([snapshot])) {
+      showPending = preloadKaijuModels([snapshot]).then(() => { if (req === showReq && !disposed) showNow(snapshot); });
+      return null;
+    }
+    return showNow(snapshot);
+  };
+  const showNow = (snapshot) => {
     clearModels();
     const m = buildKaijuModel(snapshot);
     m.position.set(0, stage.arena ? stage.arena.showcaseY : 0, 0);
@@ -194,6 +212,7 @@ export function createStage(canvas, opts = {}) {
   }
 
   stage.setFighters = (snapA, snapB) => {
+    showReq++; // a pending showcase swap must not replace the fighters
     clearModels();
     stage.fighters[0] = buildKaijuModel(snapA);
     stage.fighters[1] = buildKaijuModel(snapB);

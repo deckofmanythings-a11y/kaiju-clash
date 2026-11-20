@@ -51,6 +51,7 @@
     <div class="row" style="margin-top:4px"><button id="injNone">None</button><button id="injAll">All</button></div>
     <div id="cond" style="margin:4px 0;font-weight:700">Healthy</div>
     <label><input type="checkbox" id="fallen"> Fallen (memorial statue)</label>
+    <label><input type="checkbox" id="useGlb" checked> GLB models (off = procedural fallback)</label>
     <button id="btnWalk">Walk: off</button>
     <button id="btnGalInj">Gallery w/ injuries</button>
     <h2>Fighter B</h2>
@@ -82,7 +83,8 @@
 <script type="module">
 import * as THREE from 'three';
 import { createStage } from './stage.js';
-import { buildKaijuModel, disposeObject } from './kaiju-model.js';
+import { buildKaijuModel, disposeObject, preloadKaijuModels } from './kaiju-model.js';
+import { setGlbEnabled, glbEnabled } from './glb-models.js';
 import { playBattle } from './playback.js';
 import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES } from '../data/frames.js';
 import { ABILITY_BY_ID, abilitiesForFrame } from '../data/abilities.js';
@@ -136,6 +138,8 @@ $('#inj').addEventListener('change', e => { if (e.target.checked) injured.add(e.
 $('#injNone').onclick = () => { injured.clear(); syncInjuryUI(); refresh(); };
 $('#injAll').onclick = () => { INJURIES.forEach(i => injured.add(i.id)); syncInjuryUI(); refresh(); };
 $('#fallen').onchange = () => refresh();
+$('#useGlb').checked = glbEnabled();
+$('#useGlb').onchange = () => { setGlbEnabled($('#useGlb').checked); refresh(); };
 $('#btnWalk').onclick = () => { walkOn = !walkOn; $('#btnWalk').textContent = 'Walk: ' + (walkOn ? 'on' : 'off'); };
 stage.addTicker(() => {
   const all = [stage.showcaseModel, ...gallery].filter(Boolean);
@@ -163,11 +167,14 @@ function refresh() {
   else if (mode === 'gallery') showGallery(galleryLv, galleryInj);
 }
 function stopPlaying() { if (playing) { playing.stop(); playing = null; } }
-function showcase() { stopPlaying(); clearGallery(); mode = 'show'; stage.showcase(snapA()); }
-function faceOff() { stopPlaying(); clearGallery(); mode = 'pair'; stage.setFighters(snapA(), snapB()); }
+function showcase() { stopPlaying(); clearGallery(); mode = 'show'; job++; stage.showcase(snapA()); }
+let job = 0; // GLB models load lazily: wait for the frames, then build (a newer request wins)
+async function faceOff() { stopPlaying(); clearGallery(); mode = 'pair'; const a = snapA(), b = snapB(), j = ++job; await stage.preload([a, b]); if (j === job) stage.setFighters(a, b); }
 let galleryLv, galleryInj = false;
-function showGallery(lv, withInj = false) {
-  stopPlaying(); clearGallery(); mode = 'gallery'; galleryLv = lv; galleryInj = withInj;
+async function showGallery(lv, withInj = false) {
+  stopPlaying(); mode = 'gallery'; galleryLv = lv; galleryInj = withInj;
+  const j = ++job; await preloadKaijuModels(FRAMES.map(f => f.id)); if (j !== job) return;
+  clearGallery();
   stage.setFighters({ frame: 'saurian' }, { frame: 'saurian' });
   // hide fighters for the gallery
   for (const f of stage.fighters) f.visible = false;
@@ -241,10 +248,11 @@ function makeFakeRecord(A, B, env) {
 const hpNow = [1, 1];
 function setHp(k, hp, max) { hpNow[k] = hp; $(k ? '#hB' : '#hA').style.width = Math.max(0, 100 * hp / max) + '%'; }
 function log(s) { const d = document.createElement('div'); d.textContent = s; $('#log').prepend(d); }
-function playFake() {
+async function playFake() {
   stopPlaying(); clearGallery(); mode = 'battle';
   const env = $('#env').value;
   const rec = makeFakeRecord(snapA(), snapB(), env === 'studio' ? 'city' : env);
+  const j = ++job; await stage.preload(rec.fighters); if (j !== job) return;
   window.__lastRecord = rec;
   $('#env').value = rec.env;
   stage.setEnvironment(rec.env);

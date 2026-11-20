@@ -9,7 +9,7 @@ import * as codes from './codes.js';
 import * as api from './api.js';
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 
 document.getElementById('ver').textContent = `Ver. ${APP_VERSION} · engine v${ENGINE_VERSION}`;
 
@@ -632,11 +632,19 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
   };
 
   if (stage && playBattle) {
-    try {
-      setEnv(record.env);
-      stage.setFighters(record.fighters[0], record.fighters[1]);
-      playing = playBattle(stage, record, { speed: 1, onEvent, onDone });
-    } catch (e) { console.error(e); playing = textPlayback(record, onEvent, onDone); }
+    // the fighters' GLB models load lazily: hold the playback until both are in, so the battle never starts on a
+    // procedural stand-in and pops. Until then `playing` is a stand-in that remembers stop / speed / skip.
+    const pend = { stopped: false, speed: 1, skip: false, stop() { this.stopped = true; }, setSpeed(s) { this.speed = s; }, skipToEnd() { this.skip = true; } };
+    playing = pend;
+    try { setEnv(record.env); } catch (e) { console.warn(e); }
+    Promise.resolve(stage.preload ? stage.preload(record.fighters) : null).catch(() => {}).then(() => {
+      if (pend.stopped || playing !== pend) return;
+      try {
+        stage.setFighters(record.fighters[0], record.fighters[1]);
+        playing = playBattle(stage, record, { speed: pend.speed, onEvent, onDone });
+        if (pend.skip) playing.skipToEnd();
+      } catch (e) { console.error(e); playing = textPlayback(record, onEvent, onDone); }
+    });
   } else playing = textPlayback(record, onEvent, onDone);
 
   hud.onclick = (e) => {

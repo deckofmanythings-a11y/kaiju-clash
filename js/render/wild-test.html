@@ -61,7 +61,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { createStage } from './stage.js';
-import { buildKaijuModel, disposeObject } from './kaiju-model.js';
+import { buildKaijuModel, disposeObject, preloadKaijuModels } from './kaiju-model.js';
 import { FRAME_BY_ID, WILD_FRAMES, STATS } from '../data/frames.js';
 import { ABILITY_BY_ID } from '../data/abilities.js';
 import { ENVIRONMENTS } from '../data/environments.js';
@@ -98,9 +98,12 @@ $('#lv').onchange = () => { if (mode === 'show') showcase(current); else if (mod
 
 function stopPlaying() { if (playing) { playing.stop(); playing = null; } }
 function clearGallery() { for (const m of gallery) disposeObject(m); gallery = []; if (galleryTicker) { galleryTicker(); galleryTicker = null; } }
-function showcase(id) { stopPlaying(); clearGallery(); mode = 'show'; current = id; stage.showcase(snap(id)); }
-function showGallery() {
-  stopPlaying(); clearGallery(); mode = 'gallery';
+let job = 0; // GLB models load lazily: wait for the frames, then build (a newer request wins)
+function showcase(id) { stopPlaying(); clearGallery(); mode = 'show'; current = id; job++; stage.showcase(snap(id)); }
+async function showGallery() {
+  stopPlaying(); mode = 'gallery';
+  const j = ++job; await preloadKaijuModels([...WILD_FRAMES.map(f => f.id), 'saurian']); if (j !== job) return;
+  clearGallery();
   stage.setFighters({ frame: 'saurian' }, { frame: 'saurian' });
   for (const f of stage.fighters) f.visible = false;
   const y = stage.arena ? stage.arena.showcaseY : 0;
@@ -190,10 +193,11 @@ function makeRecord(wildId, wildIdx) {
 
 function setHp(k, hp, max) { $(k ? '#hB' : '#hA').style.width = Math.max(0, 100 * hp / max) + '%'; }
 function log(s) { const d = document.createElement('div'); d.textContent = s; $('#log').prepend(d); }
-function fight(wildId) {
+async function fight(wildId) {
   stopPlaying(); clearGallery(); mode = 'battle'; current = wildId;
   const wi = $('#wildA').checked ? 0 : 1;
   const rec = makeRecord(wildId, wi);
+  const j = ++job; await stage.preload(rec.fighters); if (j !== job) return;
   window.__lastRecord = rec;
   $('#env').value = rec.env;
   stage.setEnvironment(rec.env);

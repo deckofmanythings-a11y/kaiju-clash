@@ -18,12 +18,17 @@
 // (named attach points with an outward normal). Stat tiers and ability cosmetics are then added generically
 // on those mounts, so any plan (or a GLB loaded later via registerPlanBuilder) gets upgrades for free as long
 // as it registers mounts.
+//
+// GLB models (js/render/glb-models.js): when a frame's GLB has been preloaded (await preloadKaijuModels([...]))
+// buildKaijuModel() builds from it instead of the procedural plan; otherwise (not loaded yet, load failed,
+// ?glb=0) the procedural plan below is the fallback. The rig contract is identical either way.
 
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { FRAME_BY_ID, visualTiers } from '../data/frames.js';
 import { ABILITY_BY_ID } from '../data/abilities.js';
 import * as INJ from '../data/injuries.js';
+import { glbReady, glbMissing, preloadFrames, buildGlbPlan } from './glb-models.js';
 
 const V3 = THREE.Vector3;
 const v = (x = 0, y = 0, z = 0) => new V3(x, y, z);
@@ -1442,6 +1447,8 @@ const _nm3 = new THREE.Matrix3();
 const _mA = new THREE.Matrix4();
 const _ray = new THREE.Raycaster();
 
+// GLB rigs animate proxies / use aligned mount points: both carry the bone they stand for
+const real = (o) => o?.userData?.bone || o;
 function isUnder(o, anc) {
   for (let p = o; p; p = p.parent) if (p === anc) return true;
   return false;
@@ -1507,21 +1514,22 @@ class InjuryKit {
     c.root.traverse(o => { if (o.isMesh && this.surfaceOK(o)) this.surface.push(o); });
     // torso = surfaces under rig.body that are not limbs / heads
     const ex = [];
-    for (const L of c.rig.limbs) { if (L.pivot) ex.push(L.pivot); if (L.joints?.[0]) ex.push(L.joints[0]); }
-    for (const k of ['handL', 'handR']) if (c.rig.extra[k]) ex.push(c.rig.extra[k]);
+    for (const L of c.rig.limbs) { if (L.type === 'neck' && c.glb) continue; if (L.pivot) ex.push(real(L.pivot)); if (L.joints?.[0]) ex.push(real(L.joints[0])); }
+    for (const k of ['handL', 'handR']) if (c.rig.extra[k] && !c.glb) ex.push(c.rig.extra[k]);
+    const heads = c.rig.heads.map(real);
     const notLimb = (o) => !ex.some(e => isUnder(o, e));
     const body = c.rig.body || c.root;
-    let torso = this.surface.filter(o => isUnder(o, body) && notLimb(o) && !c.rig.heads.some(h => isUnder(o, h)));
+    let torso = this.surface.filter(o => isUnder(o, body) && notLimb(o) && !heads.some(h => isUnder(o, h)));
     if (torso.length < 2) torso = this.surface.filter(o => isUnder(o, body) && notLimb(o));
     if (torso.length < 1) torso = this.surface.slice();
     this.torso = this.group(torso);
-    const hp = c.rig.headPivot;
-    const head = hp ? this.surface.filter(o => isUnder(o, hp) && !c.rig.heads.some(h => h !== hp && isUnder(o, h) && !isUnder(hp, h))) : [];
+    const hp = real(c.rig.headPivot);
+    const head = hp ? this.surface.filter(o => isUnder(o, hp) && !heads.some(h => h !== hp && isUnder(o, h) && !isUnder(hp, h))) : [];
     this.head = head.length ? this.group(head) : this.torso;
   }
   surfaceOK(o) {
     const c = this.c, m = o.material;
-    if (!c.baseMeshes?.has(o) || !m || Array.isArray(m) || o.userData.injury) return false;
+    if (!c.baseMeshes?.has(o) || !m || Array.isArray(m) || o.userData.injury || o.isSkinnedMesh) return false;
     if (isEmissiveMat(m) || m.userData.eye || m.transparent) return false;
     if (c.plan !== 'golem' && (m === c.M.horn || m === c.M.membrane)) return false;
     return true;
@@ -1834,6 +1842,27 @@ const INJURY_VIS = {
     if (!hp) return;
     const H = K.head;
     const eyes = [];
+    if (c.glb) {
+      // eyes are part of the skinned body: cover the right-most one with a swollen-shut lid that rides its bone
+      const g = c.glb.eyes.slice().sort((a, b) => b.center.x - a.center.x)[0];
+      if (!g) return;
+      const lid = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), K.mats.deadEye);
+      K.tag(lid);
+      const fr = K.frameOf(g.bone);
+      const at = c.glb.inst.localToWorld(g.center.clone().divideScalar(c.glb.inst.scale.x || 1));
+      lid.position.copy(at.clone().applyMatrix4(fr.inv));
+      lid.scale.setScalar(g.r * 1.12 / fr.scale);
+      g.bone.add(lid);
+      const dir = at.clone().sub(H.center).normalize();
+      const list = K.near(H.meshes, at, 2);
+      const hit = K.cast(list, at, dir, 2.5) || { point: at, normal: dir, object: lid };
+      const R = Math.max(g.r * 2.4, 0.42 * Math.min(1.2, H.radius / 1.2));
+      K.patch(list.length ? list : H.meshes, hit, R, GRAD.burn, { jitter: 0.45, segs: 18, lift: 0.05 });
+      for (const ang of [PI + 0.5, PI - 0.4]) {
+        K.stroke(list, hit, rayPts(R * 1.5, ang, { n: 5, jag: R * 0.25, rnd: K.rng, a0: Math.cos(ang) * g.r, b0: Math.sin(ang) * g.r }), (u) => R * 0.12 * (1 - 0.7 * u), K.mats.raw, { tangent: UP, raise: 0.3 });
+      }
+      return;
+    }
     hp.traverse(o => {
       if (!o.isMesh || !o.material?.userData?.eye || o.userData.injury) return;
       if (c.rig.heads.some(h => h !== hp && isUnder(o, h) && !isUnder(hp, h))) return;
@@ -1873,7 +1902,7 @@ const INJURY_VIS = {
   },
   claw(K, def) {
     const c = K.c, ex = c.rig.extra, rnd = K.rng;
-    const hand = ex.handR || ex.handL || null;
+    const hand = real(ex.handR || ex.handL || null);
     const wp = (o) => o.getWorldPosition(new V3());
     let parts = hand ? c.rig.powParts.filter(p => isUnder(p, hand) || isUnder(hand, p)) : [];
     if (!parts.length) parts = c.rig.powParts.slice().sort((a, b) => (wp(b).x + wp(b).z * 0.5) - (wp(a).x + wp(a).z * 0.5));
@@ -1919,7 +1948,7 @@ const INJURY_VIS = {
     if (hand) {
       // tentacle tip / wing: no claws, so the "hand" part itself is battered
       let root = hand;
-      if (!countMeshes(root) && root.parent) { root = root.parent; root.scale.multiplyScalar(0.8); }
+      if (!countMeshes(root) && root.parent) { root = root.parent; if (!c.glb) root.scale.multiplyScalar(0.8); }
       K.darken(root);
       crackOn(root, def.severity);
       return;
@@ -1937,7 +1966,7 @@ const INJURY_VIS = {
     if (K.limpDone) return;
     K.limpDone = true;
     const sev = sevMax;
-    const wpos = (o) => o.getWorldPosition(new V3());
+    const wpos = (o) => real(o).getWorldPosition(new V3());
     const order = rig.hover ? ['wing', 'leg', 'tentacle', 'tail', 'neck'] : ['leg', 'tentacle', 'wing', 'tail', 'neck'];
     let L = null;
     for (const type of order) {
@@ -1958,6 +1987,7 @@ const INJURY_VIS = {
     // the visible damage: bruise, and for a major break a splint + bandages
     let seg = L.knee || L.pivot;
     if (L.joints) seg = L.joints[Math.min(L.joints.length - 1, Math.max(1, Math.floor(L.joints.length * 0.3)))];
+    seg = real(seg);
     let ms = seg.children.filter(o => o.isMesh && c.baseMeshes.has(o) && !isEmissiveMat(o.material));
     if (!ms.length) { ms = []; seg.traverse(o => { if (o.isMesh && c.baseMeshes.has(o) && !isEmissiveMat(o.material)) ms.push(o); }); }
     if (!ms.length) return;
@@ -1973,8 +2003,9 @@ const INJURY_VIS = {
     K.patch(ms, hit, R, sev >= 2 ? GRAD.bruiseHeavy : GRAD.bruise, { sx: 0.8, sy: 1.3, jitter: 0.4, tangent: UP });
     if (sev < 2) return;
     if (L.type === 'wing') {
-      const wm = []; L.pivot.traverse(o => { if (o.isMesh && c.baseMeshes.has(o) && !isEmissiveMat(o.material) && !o.userData.injury) wm.push(o); });
+      const wm = []; real(L.pivot).traverse(o => { if (o.isMesh && c.baseMeshes.has(o) && !isEmissiveMat(o.material) && !o.userData.injury) wm.push(o); });
       const WG = K.group(wm);
+      if (!wm.length) return;
       const root = wpos(L.pivot).lerp(WG.center, 0.4);
       const wh = K.cast(wm, root, v(0, 1, 0));
       for (const off of [-0.45, 0, 0.45]) K.stroke(wm, wh, linePts(3.2, PI / 2 + 0.2, off, { n: 9, bow: 0, rnd: K.rng }), (u) => 0.12, K.mats.cloth, { tangent: v(0, 0, 1), raise: 0.4 });
@@ -2099,7 +2130,7 @@ function makeStatue(c, model) {
     for (const L of legs) { L.pivot.rotation.x -= 1.3; L.knee.rotation.x += 1.9; }
     for (const L of rig.limbs) if (L.type === 'arm') { L.pivot.rotation.x -= 0.3; if (L.elbow) L.elbow.rotation.x += 0.25; }
     R.rotation.x = 0.26;
-    ground = legs.map(L => L.pivot);
+    ground = c.glb ? null : legs.map(L => L.pivot);
   } else if (rig.limbs.filter(L => L.type === 'leg' && L.axis === 'y' && L.knee).length >= 4) {
     // insects / arachnids: belly down, legs curled in
     for (const L of rig.limbs) if (L.type === 'leg' && L.knee) { L.pivot.rotation.x += 0.3; L.knee.rotation.x -= 0.55; }
@@ -2118,9 +2149,19 @@ function makeStatue(c, model) {
   }
   for (const L of rig.limbs) if (L.type === 'tail' && L.joints) L.joints.forEach((j, i) => { if (i) j.rotation.z += 0.12; });
   rig.hover = 0;
+  if (c.glb) c.glb.applyPose(true); // bake the proxy pose into the bones (statues are never animated)
   // stone everything; scars become carved cracks
   const stone = (hex) => { const m = stdMat({ color: hex, vertexColors: true, roughness: 0.96, metalness: 0 }); m.userData.stone = true; return m; };
   const S = { base: stone('#8f8b83'), light: stone('#a19d93'), dark: stone('#6c6963') };
+  const S2 = {}; // double-sided twins for thin GLB surfaces (wings, capes)
+  const sided = (t, m) => {
+    if (!m || m.side !== THREE.DoubleSide) return t;
+    const k = t === S.light ? 'light' : t === S.dark ? 'dark' : 'base';
+    if (!S2[k]) { S2[k] = t.clone(); S2[k].side = THREE.DoubleSide; S2[k].userData.stone = true; }
+    return S2[k];
+  };
+  const LIGHT_SLOTS = new Set(['belly', 'horn', 'skin', 'skin2', 'feather', 'sclera', 'ribbon', 'wand', 'gold']);
+  const DARK_SLOTS = new Set(['plate', 'dark', 'eye', 'iris', 'mouth', 'gun', 'glass', 'hair', 'brow', 'beak']);
   const carve = stdMat({ color: '#2b2926', roughness: 1 });
   const decal = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, roughness: 1 });
   const M = c.M;
@@ -2129,6 +2170,7 @@ function makeStatue(c, model) {
   model.updateMatrixWorld(true);
   for (const o of meshes) {
     const m = Array.isArray(o.material) ? o.material[0] : o.material;
+    if (o.userData.collider) continue;
     if (o.userData.decal) {
       const col = o.geometry.attributes.color;
       for (let i = 0; i < col.count; i++) {
@@ -2141,9 +2183,10 @@ function makeStatue(c, model) {
     }
     if (o.userData.scar || m?.userData?.woundGlow) { o.material = carve; continue; }
     let target = S.base;
-    if (m === M.belly || m === M.horn || m?.userData?.injury) target = S.light;
-    else if (m === M.plate || m === M.dark || m?.userData?.eye || (m && isEmissiveMat(m))) target = S.dark;
-    o.material = target;
+    const slot = m?.userData?.slot;
+    if (m === M.belly || m === M.horn || m?.userData?.injury || LIGHT_SLOTS.has(slot)) target = S.light;
+    else if (m === M.plate || m === M.dark || m?.userData?.eye || DARK_SLOTS.has(slot) || (m && isEmissiveMat(m))) target = S.dark;
+    o.material = sided(target, m);
     weatherColors(o, done);
   }
   // ground it, then set it on a plinth
@@ -2431,7 +2474,16 @@ export function buildKaijuModel(snapshot = {}) {
   const model = new THREE.Group();
   model.name = 'kaiju:' + (snapshot.name || snapshot.frame || plan);
   let c = new BuildCtx(snapshot, plan, tiers, colors, abilities, seed);
-  try {
+  let built = false;
+  if (glbReady(snapshot.frame)) {
+    try { buildGlbPlan(c, snapshot.frame); built = true; }
+    catch (e) {
+      console.warn('[kaiju-model] GLB build failed, using the procedural model', snapshot.frame, e);
+      disposeObject(c.root);
+      c = new BuildCtx(snapshot, plan, tiers, colors, abilities, seed);
+    }
+  }
+  if (!built) try {
     PLAN_BUILDERS[plan](c);
   } catch (e) {
     console.warn('[kaiju-model] plan builder failed, falling back to biped', plan, e);
@@ -2447,7 +2499,8 @@ export function buildKaijuModel(snapshot = {}) {
   if (!c.rig.headPivot) { const hp = c.g(c.root, v(0, 8, 1)); registerHead(c, hp, null, null); }
   if (!c.rig.mouth) { const m = new THREE.Object3D(); c.rig.headPivot.add(m); c.rig.mouth = m; c.rig.mouths.push(m); }
   c.rig.body.scale.set(c.bulk, 1, (c.bulk + 1) / 2);
-  try { applyUpgrades(c); } catch (e) { console.warn('[kaiju-model] upgrades failed', e); }
+  // GLB models carry their own pre-placed tier parts
+  if (!c.glb) try { applyUpgrades(c); } catch (e) { console.warn('[kaiju-model] upgrades failed', e); }
   try { applyVis(c); } catch (e) { console.warn('[kaiju-model] cosmetics failed', e); }
 
   // injuries + condition, then (for the dead) the memorial statue
@@ -2502,6 +2555,8 @@ export function buildKaijuModel(snapshot = {}) {
   };
   rig.headLocalZ = (() => { const p = new V3(); rig.headPivot.getWorldPosition(p); model.worldToLocal(p); return p.z; })();
   makeRigRuntime(rig, model, colors);
+  rig.glb = !!c.glb;
+  if (c.glb) c.glb.finish(rig, model);
   const _p = new V3();
   rig.getMouthWorld = (i = 0, out = new V3()) => { const m = rig.mouths[i % rig.mouths.length] || rig.mouth; m.updateWorldMatrix(true, false); return m.getWorldPosition(out); };
   rig.getCenterWorld = (out = new V3()) => { const o = rig.attach.chest; o.updateWorldMatrix(true, false); o.getWorldPosition(out); return out; };
@@ -2510,17 +2565,26 @@ export function buildKaijuModel(snapshot = {}) {
   rig.dispose = () => disposeObject(model);
   model.userData.rig = rig;
   model.userData.snapshot = snapshot;
-  model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  model.traverse(o => { if (o.isMesh && !o.userData.fx) { o.castShadow = true; o.receiveShadow = true; } });
   return model;
 }
+
+// Lazy GLB loading. Await this for the frames about to be shown, then call buildKaijuModel() as usual.
+// Accepts snapshots or frame ids; never rejects (a frame that fails to load falls back to its procedural plan).
+const frameIdsOf = (list) => (Array.isArray(list) ? list : [list]).map(s => (typeof s === 'string' ? s : s?.frame)).filter(Boolean);
+export function preloadKaijuModels(list) { return preloadFrames(frameIdsOf(list)); }
+// true when every frame in `list` can be built right now without a fetch (loaded, failed -> fallback, or no GLB)
+export function kaijuModelsReady(list) { return glbMissing(frameIdsOf(list)).length === 0; }
 
 export function disposeObject(obj) {
   if (!obj) return;
   obj.traverse(o => {
-    if (o.geometry) o.geometry.dispose();
+    // GLB geometry / textures are shared by every clone of a frame (owned by the glb-models cache)
+    if (o.geometry && !o.geometry.userData?.shared) o.geometry.dispose();
+    if (o.isSkinnedMesh) o.skeleton?.dispose();
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
     for (const m of mats) {
-      for (const k of ['map', 'emissiveMap', 'alphaMap', 'normalMap', 'roughnessMap']) if (m[k]) m[k].dispose();
+      for (const k of ['map', 'emissiveMap', 'alphaMap', 'normalMap', 'roughnessMap']) if (m[k] && !m[k].userData?.shared) m[k].dispose();
       m.dispose();
     }
   });
