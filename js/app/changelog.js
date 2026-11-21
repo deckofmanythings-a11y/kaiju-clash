@@ -1,6 +1,11 @@
 // Player-facing changelog, newest first. Add an entry with every version bump (APP_VERSION in main.js).
 // Sections: added, changed, fixed, removed (omit empty ones). Keep lines short and in players' terms.
+// Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
+  {
+    v: '1.8.1', date: '2026-11-20',
+    changed: ['Tidied up the changelog wording.'],
+  },
   {
     v: '1.8.0', date: '2026-11-20',
     added: ["A changelog: click the version under the logo to see what's new in every update."],
@@ -9,8 +14,7 @@ export const CHANGELOG = [
   {
     v: '1.7.0', date: '2026-11-20',
     changed: [
-      'The rare Wild enemies (Superhero, Superhero Team, Army, Magical Girl) use their new detailed models.',
-      'All their special moves carry over: cloth cape, eye beams, tag-team swaps, transformation, air strikes, reinforcements.',
+      'Rare Wild encounters use new detailed models too, with all of their special moves intact.',
     ],
   },
   {
@@ -45,7 +49,7 @@ export const CHANGELOG = [
   {
     v: '1.3.0', date: '2026-11-19',
     added: [
-      'Rare Wild encounters: the Superhero, Superhero Team, Army and Magical Girl. Beat one for double Biomass and a trophy.',
+      'Rare Wild encounters: something unusual sometimes shows up in the Arena. Beat one for double Biomass and a trophy.',
       'Every set of opponents now includes at least one Wild Kaiju.',
       'Version number shown under the logo.',
     ],
