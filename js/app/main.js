@@ -9,11 +9,11 @@ import * as codes from './codes.js';
 import * as api from './api.js';
 import { CHANGELOG } from './changelog.js';
 import { codexHtml, renderAbilityList, statMath, abilityMath } from './codex.js';
-import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS, MOD_IDS, modAllowed, modAbility, allocNet } from '../data/finetune.js';
+import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS, MOD_IDS, modAllowed, modAbility, allocNet, isRetune } from '../data/finetune.js?v=2';   // versioned: the 1.11.0 copy may be cached without isRetune
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html,
 // and add a player-facing entry to js/app/changelog.js.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.11.1';
 
 // Version line doubles as the changelog button; a dot marks updates you haven't opened yet.
 const SEEN_KEY = 'kb-seen-version';
@@ -346,7 +346,7 @@ function draftFor(k) {
   if (!tuneDraft || tuneDraft.kaijuId !== k.id) tuneDraft = { kaijuId: k.id, alloc: { ...(k.tune?.alloc || {}) } };
   return tuneDraft;
 }
-const retuneCost = (k, alloc) => (STATS.every(s => (alloc[s] || 0) >= (k.tune?.alloc?.[s] || 0)) ? 0 : RETUNE_COST);
+const retuneCost = (k, alloc) => (isRetune(k.tune?.alloc || {}, alloc) ? RETUNE_COST : 0);
 function fineTuneHtml(k, bio) {
   const t = k.tune;
   if (!t?.on) {
@@ -443,7 +443,7 @@ function lab() {
     if (e.target.id === 'treset') { tuneDraft = null; const y = panel.scrollTop; lab(); panel.scrollTop = y; }
     if (e.target.id === 'tapply') {
       const d = draftFor(k), cost = retuneCost(k, d.alloc);
-      if (cost && !confirm(`Lowering tuned steps costs ${cost} BIO. Apply?`)) return;
+      if (cost && !confirm(`Undoing earlier tuning costs ${cost} BIO. Apply?`)) return;
       const r = await act('ft_alloc', { kaiju_id: k.id, alloc: d.alloc }); if (r) tuneDraft = null;
     }
     const hl = e.target.closest('[data-heal]');

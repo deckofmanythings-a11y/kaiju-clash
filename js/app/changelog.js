@@ -3,6 +3,10 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.11.1', date: '2026-11-21',
+    fixed: ['Fine Tune: trading one stat down for another is now free. Only undoing or shrinking earlier tuning costs the 50 BIO re-tune fee.'],
+  },
+  {
     v: '1.11.0', date: '2026-11-21',
     added: [
       '★ Fine Tune: once a Kaiju reaches 1200 Elo, unlock Fine Tune for it in the Lab. Raise or lower individual stats in small steps (lowering one frees a point for another), and add a skill mod to any ability: Overcharged, Efficient, Rapid, Precise, Potent or Lasting.',

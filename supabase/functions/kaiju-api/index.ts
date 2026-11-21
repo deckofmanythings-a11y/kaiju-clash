@@ -11,7 +11,7 @@ import { ENVIRONMENTS } from '../_shared/kaiju/data/environments.js';
 import { statUpgradeCost, powerRating, battleReward, generateRival, pickRare, RARE_CHANCE, RARE_POWER_PCT, RARE_REWARD_MULT } from '../_shared/kaiju/data/economy.js';
 import { INJURY_BY_ID, healMs, healCost } from '../_shared/kaiju/data/injuries.js';
 import { rollAftermath } from '../_shared/kaiju/engine/aftermath.js';
-import { FT_ELO, FT_UNLOCK_COST, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS, modAllowed, sanitizeTune, allocNet } from '../_shared/kaiju/data/finetune.js';
+import { FT_ELO, FT_UNLOCK_COST, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS, modAllowed, sanitizeTune, allocNet, isRetune } from '../_shared/kaiju/data/finetune.js';
 
 const MAX_KAIJU = 6;
 const RATED_FIGHTS_PER_DAY = 40;
@@ -294,7 +294,7 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
     return bootstrap(uid);
   },
 
-  // Re-allocate points. Free if it only places unspent points; otherwise costs RETUNE_COST.
+  // Re-allocate points. Placing points and new trades are free; undoing/shrinking earlier steps costs RETUNE_COST.
   async ft_alloc(uid, b) {
     const k = await ownKaiju(uid, b.kaiju_id);
     const t = k.tune;
@@ -306,9 +306,7 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
       if (v) alloc[st] = v;
     }
     if (allocNet(alloc) > (t.pts || 0)) throw new Fail('Not enough tuning points.');
-    const old = t.alloc || {};
-    const onlyAdds = STATS.every((st: string) => (alloc[st] || 0) >= (old[st] || 0));
-    await spend(uid, k, onlyAdds ? 0 : RETUNE_COST, { tune: { ...t, alloc } });
+    await spend(uid, k, isRetune(t.alloc || {}, alloc) ? RETUNE_COST : 0, { tune: { ...t, alloc } });
     return bootstrap(uid);
   },
 

@@ -13,7 +13,7 @@ export const TUNE_MAX = 3;             // max steps up or down per stat
 export const TUNE_MAX_PTS = 6;         // max bought points per Kaiju
 export const tunePointCost = (owned) => 320 + 80 * owned;   // price of the next point (1st ≈ break-even, later points worse)
 export const MOD_COST = 1150;          // applying (or swapping) a skill mod (≈ 93% of measured value)
-export const RETUNE_COST = 50;         // re-allocating points (free while buying)
+export const RETUNE_COST = 50;         // undoing or shrinking earlier tuning (placing points / new trades are free)
 
 export const MODS = {
   overcharge: { name: 'Overcharged', desc: 'Power +15%, costs 10 more energy.',
@@ -74,4 +74,9 @@ export function applyTune(stats, tune) {
 export function tunePower(tune) {
   if (!tune?.on) return 0;
   return 5 * Math.max(0, allocNet(tune.alloc)) + 10 * Object.keys(tune.mods || {}).length;
+}
+
+// True if going from old to next allocation undoes or shrinks any existing step (that costs RETUNE_COST).
+export function isRetune(old = {}, next = {}) {
+  return STATS.some(s => { const o = old[s] || 0, n = next[s] || 0; return o !== 0 && (Math.sign(n) !== Math.sign(o) || Math.abs(n) < Math.abs(o)); });
 }
