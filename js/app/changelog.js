@@ -3,6 +3,14 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.10.0', date: '2026-11-21',
+    added: [
+      'The Codex: a new tab with every rule and number the battle engine uses, including the damage formula, accuracy, crits, initiative, energy, status effects, resistances, arenas, how Kaiju pick moves, rewards and injury odds.',
+      'Full numbers for every ability (power, hits, accuracy, cost, cooldown, effect chances) with filters by frame and type.',
+      'The Lab now has "Show the math": what each of your stats actually does right now and what the next level adds, plus the real damage, healing and shield numbers for each of your abilities.',
+    ],
+  },
+  {
     v: '1.9.0', date: '2026-11-20',
     added: [
       'Replay filters: show only wins, losses or draws, close battles, underdog wins, or fights involving a particular monster type.',

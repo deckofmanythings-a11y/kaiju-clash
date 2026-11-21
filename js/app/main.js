@@ -8,10 +8,11 @@ import { INJURY_BY_ID, conditionOf, deathChance, healCost, applyInjuries } from 
 import * as codes from './codes.js';
 import * as api from './api.js';
 import { CHANGELOG } from './changelog.js';
+import { codexHtml, renderAbilityList, statMath, abilityMath } from './codex.js';
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html,
 // and add a player-facing entry to js/app/changelog.js.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.10.0';
 
 // Version line doubles as the changelog button; a dot marks updates you haven't opened yet.
 const SEEN_KEY = 'kb-seen-version';
@@ -170,13 +171,13 @@ async function initStage() {
 }
 
 // ---------- Router ----------
-const SCREENS = { auth, name: nameScreen, hangar, creator, lab, arena, ladder: ladderScreen, replays };
+const SCREENS = { auth, name: nameScreen, hangar, creator, lab, arena, ladder: ladderScreen, replays, codex };
 function go(s) {
   if (playing) { playing.stop(); playing = null; }
   applyPendingBoot();   // leaving a fight early still settles the displayed state
   if (!me) s = 'auth';
   else if (me.needsName) s = 'name';
-  else if (!active() && !['creator', 'ladder', 'replays'].includes(s)) s = 'creator';
+  else if (!active() && !['creator', 'ladder', 'replays', 'codex'].includes(s)) s = 'creator';
   screen = s; showcaseOverride = null;
   hud.hidden = true; panel.hidden = false; modal.hidden = true;
   for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.go === s);
@@ -351,8 +352,12 @@ function lab() {
         <span class="val" ${st[s] < base[s] ? `style="color:var(--bad)" title="${base[s]} when healed"` : ''}>${st[s]}</span>
         ${cost === null ? '<span class="rec" style="text-align:center">MAX</span>' : `<button class="btn small" data-up="${s}" ${bio < cost ? 'disabled' : ''}>+ ${cost}</button>`}</div>`;
     }).join('')}
+    <details class="math"><summary>Show the math for ${esc(k.name)}</summary>
+      ${(() => { const m = statMath(st, f, k.levels); return STATS.map(s => `<div class="mrow"><b>${STAT_NAMES[s]} ${st[s]}</b><div>${m[s]}</div></div>`).join(''); })()}
+      <p class="rec">Full rules, formulas and every ability's numbers are in the <a href="#" data-go="codex">Codex</a>.</p>
+    </details>
     <h3>Abilities <span style="font-size:14px">(${k.abilities.length}/${MAX_EQUIPPED} equipped)</span></h3>
-    <div class="card ab"><b>${basic.name}</b><span class="tag">Basic · always on</span><div class="desc">${describe(basic)}</div></div>
+    <div class="card ab"><b>${basic.name}</b><span class="tag">Basic · always on</span><div class="desc">${describe(basic)}</div>${abilityMath(basic, st)}</div>
     ${groups.map(([label, list]) => list.length ? `<h3>${label}</h3>` + list.map(a => {
       const owned = k.unlocked.includes(a.id), eq = k.abilities.includes(a.id);
       const cls = a.frames ? 'ex' : a.universal ? 'un' : '';
@@ -360,7 +365,7 @@ function lab() {
         ? `<button class="btn small" data-buy="${a.id}" ${bio < a.price ? 'disabled' : ''}>Unlock ${a.price}</button>`
         : `<button class="btn small ${eq ? '' : 'ghost'}" data-eq="${a.id}">${eq ? 'Equipped' : 'Equip'}</button>`;
       return `<div class="card ab ${eq ? 'sel' : ''}"><div><b>${a.name}</b> <span class="tag ${cls}">${abilityScope(a)}</span>
-        <div class="meta">${a.cost ? a.cost + ' energy' : 'free'}${a.cd ? ' · ' + a.cd + ' turn cooldown' : ''}${a.vis ? ' · changes look' : ''}</div></div>${action}<div class="desc">${describe(a)}</div></div>`;
+        <div class="meta">${a.cost ? a.cost + ' energy' : 'free'}${a.cd ? ' · ' + a.cd + ' turn cooldown' : ''}${a.vis ? ' · changes look' : ''}</div></div>${action}<div class="desc">${describe(a)}</div>${abilityMath(a, st)}</div>`;
     }).join('') : '').join('')}
     <h3>Name & colors</h3>
     <input type="text" id="kname" maxlength="24" value="${esc(k.name)}">
@@ -521,6 +526,21 @@ async function ladderScreen() {
   panel.onclick = (e) => {
     const s = e.target.closest('[data-spar]');
     if (s && active()) { const l = ladder[+s.dataset.spar]; spar(l.snapshot, createRng(randomSeed()).pick(ENVIRONMENTS).id); }
+  };
+}
+
+// ---------- Codex ----------
+function codex() {
+  const k = me?.player ? active() : null;
+  const st = k ? applyInjuries(effectiveStats(k), injIds(k)) : null;
+  panel.innerHTML = codexHtml({ stats: st, frameId: k?.frame || null, kaijuName: k?.name || '' });
+  const list = () => renderAbilityList($('#cxabil'), { frame: $('#cxframe').value, kind: $('#cxkind').value, stats: k && $('#cxframe').value === k.frame ? st : null });
+  list();
+  panel.onchange = (e) => { if (e.target.id === 'cxframe' || e.target.id === 'cxkind') list(); };
+  panel.onclick = (e) => {
+    const a = e.target.closest('[data-cx]'); if (!a) return;
+    e.preventDefault();
+    const d = $('#cx-' + a.dataset.cx); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   };
 }
 
