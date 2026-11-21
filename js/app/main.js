@@ -7,11 +7,34 @@ import { randomSeed, createRng } from '../engine/rng.js';
 import { INJURY_BY_ID, conditionOf, deathChance, healCost, applyInjuries } from '../data/injuries.js';
 import * as codes from './codes.js';
 import * as api from './api.js';
-// Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html.
+import { CHANGELOG } from './changelog.js';
+// Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html,
+// and add a player-facing entry to js/app/changelog.js.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.8.0';
 
-document.getElementById('ver').textContent = `Ver. ${APP_VERSION} · engine v${ENGINE_VERSION}`;
+// Version line doubles as the changelog button; a dot marks updates you haven't opened yet.
+const SEEN_KEY = 'kb-seen-version';
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
+document.getElementById('ver').innerHTML = `<button id="whatsnew" class="verbtn" title="See what changed in each update">Ver. ${APP_VERSION} · engine v${ENGINE_VERSION} · <u>What's new</u>${lsGet(SEEN_KEY) === APP_VERSION ? '' : '<i class="newdot"></i>'}</button>`;
+const CL_SECTIONS = [['added', 'Added', 'cl-add'], ['changed', 'Changed', 'cl-chg'], ['fixed', 'Fixed', 'cl-fix'], ['removed', 'Removed', 'cl-rem']];
+function showChangelog() {
+  lsSet(SEEN_KEY, APP_VERSION);
+  document.querySelector('#whatsnew .newdot')?.remove();
+  const prevModal = { html: modal.innerHTML, hidden: modal.hidden, onclick: modal.onclick };
+  modal.innerHTML = `<div class="dialog changelog">
+    <div class="row"><h2 class="grow" style="margin:0;text-align:left">What's new</h2><button class="btn ghost small" id="clclose">Close</button></div>
+    <div class="cl-list">${CHANGELOG.map(e => `<section class="cl-entry">
+      <div class="cl-head"><b>Ver. ${esc(e.v)}</b>${e.v === APP_VERSION ? ' <span class="tag ex">Current</span>' : ''}<span class="rec">${esc(e.date)}</span></div>
+      ${CL_SECTIONS.filter(([k]) => e[k]?.length).map(([k, label, cls]) => `<div class="cl-sec"><span class="cl-tag ${cls}">${label}</span><ul>${e[k].map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`).join('')}
+    </section>`).join('')}</div>
+  </div>`;
+  modal.hidden = false;
+  const close = () => { modal.innerHTML = prevModal.html; modal.hidden = prevModal.hidden; modal.onclick = prevModal.onclick; };
+  modal.onclick = (e) => { if (e.target.id === 'clclose' || e.target === modal) close(); };
+}
+document.getElementById('whatsnew').addEventListener('click', showChangelog);
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -35,8 +58,12 @@ const active = () => me?.kaiju?.find(k => k.id === me.player.active) || me?.kaij
 const MAX_KAIJU = 6;
 const LOW_RATED = 5;   // start warning when this few rated fights are left
 const ratedLeft = () => (me?.player ? Math.max(0, me.player.ratedPerDay - me.player.fightsToday) : 0);
+// Rated fights reset at midnight Pacific (the server uses the same zone).
+const RESET_TZ = 'America/Los_Angeles';
 function resetIn() {
-  const n = new Date(), m = Math.max(1, Math.ceil((Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() + 1) - n) / 60000));
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: RESET_TZ, hourCycle: 'h23', hour: 'numeric', minute: 'numeric', second: 'numeric' })
+    .formatToParts(new Date()).map(x => [x.type, +x.value]));
+  const m = Math.max(1, Math.ceil(1440 - (p.hour * 60 + p.minute + p.second / 60)));
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
 }
 // Big, impossible-to-miss explanation of the daily rated-fight limit (or '' when there's plenty left).
@@ -46,11 +73,11 @@ function limitBanner() {
   if (!left) return `<div class="limit">
       <div class="limit-h">⛔ Daily Biomass limit reached</div>
       <p>You've used all <b>${per} rated fights</b> for today. You can keep fighting, but fights are now <b>unrated</b>: they pay <b>no Biomass and no Elo</b>, and your Kaiju can still be injured.</p>
-      <p>Rated fights reset in <b>${resetIn()}</b> (midnight UTC). You can still spend the Biomass you have in the Lab.</p>
+      <p>Rated fights reset in <b>${resetIn()}</b> (midnight Pacific). You can still spend the Biomass you have in the Lab.</p>
     </div>`;
   if (left <= LOW_RATED) return `<div class="limit soft">
       <div class="limit-h">⚠ Only ${left} rated fight${left === 1 ? '' : 's'} left today</div>
-      <p>Each day you get ${per} rated fights. After that, fights pay no Biomass or Elo until the reset in <b>${resetIn()}</b> (midnight UTC).</p>
+      <p>Each day you get ${per} rated fights. After that, fights pay no Biomass or Elo until the reset in <b>${resetIn()}</b> (midnight Pacific).</p>
     </div>`;
   return '';
 }
@@ -61,7 +88,7 @@ function updateTop() {
   if (!chip.hidden) {
     chip.classList.toggle('out', !left);
     chip.textContent = left ? `⚠ ${left} rated left` : '⛔ No BIO until reset';
-    chip.title = left ? `${left} rated fights left today. After that, fights pay no Biomass or Elo until midnight UTC.` : `Daily limit of ${me.player.ratedPerDay} rated fights reached. Fights pay no Biomass or Elo until midnight UTC (in ${resetIn()}).`;
+    chip.title = left ? `${left} rated fights left today. After that, fights pay no Biomass or Elo until midnight Pacific.` : `Daily limit of ${me.player.ratedPerDay} rated fights reached. Fights pay no Biomass or Elo until midnight Pacific (in ${resetIn()}).`;
   }
   const a = $('#acct');
   a.hidden = !me?.player; if (me?.player) a.textContent = `${me.player.name} · Sign out`;
@@ -413,7 +440,7 @@ async function arena() {
     if (f) {
       if (dc && !confirm(`${k.name} is Critical. If it is knocked out there is a ${dc}% chance it dies permanently.\n\nFight anyway?`)) return;
       if (!left && !arena._unratedOk) {
-        if (!confirm(`Daily limit reached: this fight is UNRATED.\n\nIt pays no Biomass and no Elo, but ${k.name} can still be injured. Rated fights reset in ${resetIn()} (midnight UTC).\n\nFight anyway?`)) return;
+        if (!confirm(`Daily limit reached: this fight is UNRATED.\n\nIt pays no Biomass and no Elo, but ${k.name} can still be injured. Rated fights reset in ${resetIn()} (midnight Pacific).\n\nFight anyway?`)) return;
         arena._unratedOk = true;
       }
       return rankedFight(+f.dataset.fight);
@@ -613,8 +640,8 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
         <div class="rec">${sub} · ${record.reason === 'ko' ? 'Knockout' : record.reason === 'decision' ? 'Time: decision on remaining HP' : 'Double knockout'} · ${record.turns} actions</div>
         ${verified !== undefined ? `<div class="${verified ? 'verified' : 'l'}" style="font-size:11px;margin-top:4px">${verified ? '✓ Re-simulated locally: identical to the server result' : '⚠ Local re-simulation did not match'}</div>` : ''}
         ${rare && result === 'win' ? `<div class="rarebanner" style="margin-top:10px">★ Trophy: ${FRAME_BY_ID[record.fighters[1].frame].name} defeated (×${RARE_REWARD_MULT} Biomass)</div>` : ''}
-        ${!friendly && !replay && rated === false ? `<div class="limit" style="text-align:left;margin-top:10px"><div class="limit-h">No Biomass: daily limit reached</div><p>You've used all ${me?.player?.ratedPerDay ?? 40} rated fights for today, so this fight paid <b>0 Biomass and 0 Elo</b>. Rated fights reset in <b>${resetIn()}</b> (midnight UTC).</p></div>` : ''}
-        ${!friendly && !replay && rated && me?.player && ratedLeft() === 0 ? `<div class="limit soft" style="text-align:left;margin-top:10px"><div class="limit-h">That was your last rated fight today</div><p>Fights after this pay no Biomass or Elo until the reset in <b>${resetIn()}</b> (midnight UTC).</p></div>` : ''}
+        ${!friendly && !replay && rated === false ? `<div class="limit" style="text-align:left;margin-top:10px"><div class="limit-h">No Biomass: daily limit reached</div><p>You've used all ${me?.player?.ratedPerDay ?? 40} rated fights for today, so this fight paid <b>0 Biomass and 0 Elo</b>. Rated fights reset in <b>${resetIn()}</b> (midnight Pacific).</p></div>` : ''}
+        ${!friendly && !replay && rated && me?.player && ratedLeft() === 0 ? `<div class="limit soft" style="text-align:left;margin-top:10px"><div class="limit-h">That was your last rated fight today</div><p>Fights after this pay no Biomass or Elo until the reset in <b>${resetIn()}</b> (midnight Pacific).</p></div>` : ''}
         ${!friendly && !replay && rated && me?.player && ratedLeft() > 0 && ratedLeft() <= LOW_RATED ? `<div class="rec" style="margin-top:8px;color:#fcd34d">⚠ ${ratedLeft()} rated fight${ratedLeft() === 1 ? '' : 's'} left today.</div>` : ''}
         ${aftermathHtml(aftermath, record.fighters, { mySide })}
         ${salvage ? `<div class="rec">Salvaged <b style="color:var(--gold)">${salvage} BIO</b> from the remains.</div>` : ''}

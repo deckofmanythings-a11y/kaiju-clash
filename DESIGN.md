@@ -114,7 +114,7 @@ Server-authoritative. Clients never touch the tables (RLS on, zero policies, pri
 - **Matchmaking:** the server stores 3 offers per player in `kb_offers` (opponent + environment). At most 2 are real players' active Kaiju near your Elo (window widens 150 -> 350 -> 800 -> any); at least one slot is always a seeded Wild rival, at a random position, and any Wild slot has a 6% chance to be a rare Wild-only enemy. A fight must consume an offer, so clients can't pick opponents or environments. Rerolling costs 15 BIO.
 - **Fights:** the server picks the seed, runs `simulateBattle` (same file as the browser), and settles atomically in `kb_settle` (consumes the offer, inserts `kb_battles`, pays BIO, moves both Elos). The response carries no events: the client re-simulates from `(v, seed, env, fighters)` and shows a ✓ when the hash matches.
 - **Elo:** K=32 vs players, K=16 vs wild rivals (attacker only). Defenders' Elo moves the opposite way, and they get 25 BIO for each defense win plus a "while you were away" report on next login.
-- **Limits:** 40 rated fights per UTC day; after that fights are unrated (no BIO, no Elo). Max 6 Kaiju per player.
+- **Limits:** 40 rated fights per day, resetting at midnight Pacific (America/Los_Angeles); after that fights are unrated (no BIO, no Elo). Max 6 Kaiju per player.
 - **Public actions:** `leaderboard` and `battle` (fetch any fight for replay, also via `?battle=<id>` links). Everything else requires a JWT.
 
 ### Deploy

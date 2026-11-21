@@ -84,7 +84,9 @@ const cleanColors = (c: unknown, fallback: Record<string, string>) => {
   return out;
 };
 const cleanName = (s: unknown, max: number) => String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, max);
-const utcDay = () => new Date().toISOString().slice(0, 10);
+// The daily rated-fight counter resets at midnight Pacific (DST-aware). Must match kb_settle's day expression.
+const RESET_TZ = 'America/Los_Angeles';
+const gameDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: RESET_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
 async function getPlayer(uid: string) {
   return must(await db.from('kb_players').select('*').eq('user_id', uid).maybeSingle(), 'player lookup');
@@ -195,7 +197,7 @@ async function bootstrap(uid: string) {
   if (defenses.length) await db.from('kb_players').update({ defense_seen_at: new Date().toISOString() }).eq('user_id', uid);
   return {
     player: { name: player.display_name, bio: player.bio, active: active?.id || null,
-      fightsToday: player.fights_day === utcDay() ? player.fights_today : 0, ratedPerDay: RATED_FIGHTS_PER_DAY },
+      fightsToday: player.fights_day === gameDay() ? player.fights_today : 0, ratedPerDay: RATED_FIGHTS_PER_DAY },
     kaiju, defenses, engine: ENGINE_VERSION,
     trophies: Object.entries((must(await db.from('kb_battles').select('rare:fighters->1->>frame')
       .eq('attacker_owner', uid).eq('winner', 0).is('defender_kaiju', null).in('fighters->1->>frame', RARE_FRAME_IDS).limit(2000), 'trophies') as any[])
@@ -324,7 +326,7 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
     const record = simulateBattle({ seed, env: offer.env, a: snapshot(k, player.display_name), b: oppSnap });
     const result = record.winner === 0 ? 'win' : record.winner === 1 ? 'loss' : 'draw';
     const score = result === 'win' ? 1 : result === 'loss' ? 0 : 0.5;
-    const fightsToday = player.fights_day === utcDay() ? player.fights_today : 0;
+    const fightsToday = player.fights_day === gameDay() ? player.fights_today : 0;
     const rated = fightsToday < RATED_FIGHTS_PER_DAY;
     const rareWin = !!offer.rival_frame && result === 'win';
     const reward = rated ? battleReward(result, powerRating(k), powerRating(record.fighters[1])) * (rareWin ? RARE_REWARD_MULT : 1) : 0;
