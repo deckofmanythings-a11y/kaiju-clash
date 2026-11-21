@@ -3,6 +3,7 @@ import { STATS, MAX_STAT_LEVEL, FRAMES, FRAME_BY_ID, WILD_FRAMES } from './frame
 import { ABILITY_BY_ID, abilitiesForFrame, MAX_EQUIPPED } from './abilities.js';
 import { ENVIRONMENTS } from './environments.js';
 import { createRng } from '../engine/rng.js';
+import { tunePower } from './finetune.js';
 
 export const STARTING_BIO = 300;
 export const REWARD = { win: 120, loss: 45, draw: 75 };
@@ -13,7 +14,7 @@ export function powerRating(k) {
   let r = 100;
   for (const s of STATS) r += 10 * (k.levels?.[s] || 0);
   for (const id of k.abilities || []) r += Math.floor((ABILITY_BY_ID[id]?.price || 150) / 20);
-  return r;
+  return r + tunePower(k.tune);
 }
 
 // Reward scales with how strong the opponent was relative to you.

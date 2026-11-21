@@ -7,6 +7,7 @@ import { ENVIRONMENTS } from '../data/environments.js';
 import { INJURIES, CONDITIONS, CRITICAL_AT, MAX_INJURIES, HEAL_COST, MAX_HEAL_MIN } from '../data/injuries.js';
 import { INJURY_ODDS } from '../engine/aftermath.js';
 import { REWARD, STARTING_BIO, statUpgradeCost } from '../data/economy.js';
+import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS } from '../data/finetune.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const pct = (v, p) => Math.floor((v * p) / 100);
@@ -80,7 +81,7 @@ export function codexHtml({ stats = null, frameId = null, kaijuName = '' } = {})
   return `
     <h2>Codex</h2>
     <p class="sub">Every rule and number the battle engine uses. Fights are fully automatic and deterministic: the same two Kaiju, arena and seed always play out identically. All math uses whole numbers and rounds down at every step.</p>
-    <div class="codex-toc">${[['fight', 'How a fight runs'], ['stats', 'Stats'], ['dmg', 'Damage formula'], ['acc', 'Accuracy'], ['status', 'Status effects'], ['resist', 'Resistances'], ['env', 'Arenas'], ['ai', 'How Kaiju choose moves'], ['abil', 'Ability catalogue'], ['econ', 'Biomass & upgrades'], ['inj', 'Injuries & death']].map(([id, t]) => `<a href="#cx-${id}" data-cx="${id}">${t}</a>`).join('')}</div>
+    <div class="codex-toc">${[['fight', 'How a fight runs'], ['stats', 'Stats'], ['dmg', 'Damage formula'], ['acc', 'Accuracy'], ['status', 'Status effects'], ['resist', 'Resistances'], ['env', 'Arenas'], ['ai', 'How Kaiju choose moves'], ['abil', 'Ability catalogue'], ['econ', 'Biomass & upgrades'], ['ft', '★ Fine Tune'], ['inj', 'Injuries & death']].map(([id, t]) => `<a href="#cx-${id}" data-cx="${id}">${t}</a>`).join('')}</div>
 
     <details class="cx" id="cx-fight" open><summary>How a fight runs</summary>
       <ul>
@@ -195,6 +196,20 @@ export function codexHtml({ stats = null, frameId = null, kaijuName = '' } = {})
         <li>Rated fight rewards: Win <b>${REWARD.win}</b>, Draw <b>${REWARD.draw}</b>, Loss <b>${REWARD.loss}</b>, × <code>opponent Power ÷ your Power</code>, clamped to 60–160%.</li>
         <li>Unrated fights (after the daily limit) pay nothing.</li>
       </ul>
+    </details>
+
+    <details class="cx" id="cx-ft"><summary>★ Fine Tune</summary>
+      <ul>
+        <li>Unlocks per Kaiju for <b>${FT_UNLOCK_COST}</b> BIO once that Kaiju reaches <b>${FT_ELO}</b> Elo. It stays unlocked if its Elo drops later.</li>
+        <li><b>Tuning steps</b> are added to the stat before injuries and other % modifiers: ${Object.entries(TUNE_STEP).map(([s, v]) => `${STAT_NAMES[s]} ±${v}`).join(', ')}. Each stat can go up to <b>${TUNE_MAX}</b> steps up or down.</li>
+        <li>Raised steps use tuning points; lowered steps give a point back. Points cost <code>${tunePointCost(0)} + ${tunePointCost(1) - tunePointCost(0)} × points owned</code> (${Array.from({ length: TUNE_MAX_PTS }, (_, i) => tunePointCost(i)).join(', ')}), max <b>${TUNE_MAX_PTS}</b>. Placing free points is free; lowering a tuned stat costs <b>${RETUNE_COST}</b>.</li>
+        <li><b>Skill mods</b>: one per ability (basic attack included), <b>${MOD_COST}</b> BIO to apply or swap, free to remove. A mod stays with that ability even while it's unequipped.</li>
+        <li><b>Power</b> rises by 5 per net raised step and 10 per mod.</li>
+        <li>Prices were set by simulating thousands of fights: each Biomass spent buys slightly less win rate than a Kaiju's last normal upgrades, so Fine Tune is about control, not a shortcut.</li>
+      </ul>
+      <table class="cxt"><tr><th>Mod</th><th>Effect</th><th>Fits</th></tr>
+        ${Object.values(MODS).map(m => `<tr><td><b>${m.name}</b></td><td>${m.desc}</td><td class="rec">${{ Overcharged: 'attacks', Efficient: 'abilities with an energy cost', Rapid: 'cooldown of 2+ turns', Precise: 'attacks and debuffs', Potent: 'effects with under 100% chance', Lasting: 'abilities with status effects' }[m.name]}</td></tr>`).join('')}
+      </table>
     </details>
 
     <details class="cx" id="cx-inj"><summary>Injuries &amp; death</summary>

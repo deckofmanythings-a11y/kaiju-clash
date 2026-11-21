@@ -11,6 +11,7 @@ import { ENVIRONMENTS } from '../_shared/kaiju/data/environments.js';
 import { statUpgradeCost, powerRating, battleReward, generateRival, pickRare, RARE_CHANCE, RARE_POWER_PCT, RARE_REWARD_MULT } from '../_shared/kaiju/data/economy.js';
 import { INJURY_BY_ID, healMs, healCost } from '../_shared/kaiju/data/injuries.js';
 import { rollAftermath } from '../_shared/kaiju/engine/aftermath.js';
+import { FT_ELO, FT_UNLOCK_COST, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS, modAllowed, sanitizeTune, allocNet } from '../_shared/kaiju/data/finetune.js';
 
 const MAX_KAIJU = 6;
 const RATED_FIGHTS_PER_DAY = 40;
@@ -60,7 +61,7 @@ type Kaiju = {
   id: string; owner: string; name: string; frame: string; levels: Record<string, number>;
   abilities: string[]; unlocked: string[]; colors: Record<string, string>; elo: number; version: number;
   wins: number; losses: number; draws: number; def_wins: number; def_losses: number; retired: boolean;
-  injuries: Injury[]; died_at?: string | null; death?: unknown;
+  injuries: Injury[]; died_at?: string | null; death?: unknown; tune?: any;
 };
 type Injury = { id: string; at: string; heals_at: string };
 // Injuries that haven't healed yet. Healed ones are dropped on the next write.
@@ -71,10 +72,14 @@ function invested(k: Kaiju) {
   let total = 0;
   for (const s of STATS) for (let l = 0; l < (k.levels[s] || 0); l++) total += statUpgradeCost(l) || 0;
   for (const id of k.unlocked || []) total += ABILITY_BY_ID[id]?.price || 0;
+  if (k.tune?.on) {
+    total += FT_UNLOCK_COST + MOD_COST * Object.keys(k.tune.mods || {}).length;
+    for (let p = 0; p < (k.tune.pts || 0); p++) total += tunePointCost(p);
+  }
   return total;
 }
 const snapshot = (k: Kaiju, ownerName?: string) =>
-  sanitizeSnapshot({ id: k.id, name: k.name, frame: k.frame, levels: k.levels, abilities: k.abilities, colors: k.colors, owner: ownerName, injuries: activeInjuries(k).map(i => i.id) });
+  sanitizeSnapshot({ id: k.id, name: k.name, frame: k.frame, levels: k.levels, abilities: k.abilities, colors: k.colors, owner: ownerName, injuries: activeInjuries(k).map(i => i.id), tune: k.tune });
 const cleanColors = (c: unknown, fallback: Record<string, string>) => {
   const out = { ...fallback };
   if (c && typeof c === 'object') for (const key of ['body', 'belly', 'accent']) {
@@ -109,7 +114,7 @@ async function spend(uid: string, k: Kaiju, cost: number, patch: Partial<Kaiju>)
   const { data, error } = await db.rpc('kb_spend', {
     p_user: uid, p_kaiju: k.id, p_version: k.version, p_cost: cost, p_levels: n.levels,
     p_abilities: n.abilities, p_unlocked: n.unlocked, p_colors: n.colors, p_name: n.name,
-    p_injuries: patch.injuries ?? activeInjuries(k),
+    p_injuries: patch.injuries ?? activeInjuries(k), p_tune: n.tune ?? null,
   });
   if (error) throw new Fail(error.message.replace(/^.*?: /, ''), 409);
   return data as Kaiju;
@@ -202,7 +207,7 @@ async function bootstrap(uid: string) {
     trophies: Object.entries((must(await db.from('kb_battles').select('rare:fighters->1->>frame')
       .eq('attacker_owner', uid).eq('winner', 0).is('defender_kaiju', null).in('fighters->1->>frame', RARE_FRAME_IDS).limit(2000), 'trophies') as any[])
       .reduce((acc: Record<string, number>, r) => { acc[r.rare] = (acc[r.rare] || 0) + 1; return acc; }, {})),
-    fallen: must(await db.from('kb_kaiju').select('id, name, frame, levels, abilities, colors, injuries, wins, losses, elo, died_at, death')
+    fallen: must(await db.from('kb_kaiju').select('id, name, frame, levels, abilities, colors, injuries, wins, losses, elo, died_at, death, tune')
       .eq('owner', uid).not('died_at', 'is', null).order('died_at', { ascending: false }).limit(20), 'fallen'),
   };
 }
@@ -265,6 +270,62 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
   async cosmetic(uid, b) {
     const k = await ownKaiju(uid, b.kaiju_id);
     await spend(uid, k, 0, { colors: cleanColors(b.colors, k.colors), name: cleanName(b.name, 24) || k.name });
+    return bootstrap(uid);
+  },
+
+  // ---------- Fine Tune ----------
+  async ft_unlock(uid, b) {
+    const k = await ownKaiju(uid, b.kaiju_id);
+    if (k.tune?.on) throw new Fail('Fine Tune is already unlocked for this Kaiju.');
+    if (k.elo < FT_ELO) throw new Fail(`Fine Tune needs this Kaiju at ${FT_ELO} Elo (it has ${k.elo}).`);
+    await spend(uid, k, FT_UNLOCK_COST, { tune: { on: true, pts: 0, alloc: {}, mods: {} } });
+    return bootstrap(uid);
+  },
+
+  // Buy one tuning point (optionally placing it on a stat right away).
+  async ft_point(uid, b) {
+    const k = await ownKaiju(uid, b.kaiju_id);
+    const t = k.tune;
+    if (!t?.on) throw new Fail('Unlock Fine Tune first.');
+    if ((t.pts || 0) >= TUNE_MAX_PTS) throw new Fail(`Max ${TUNE_MAX_PTS} tuning points.`);
+    const alloc = { ...(t.alloc || {}) };
+    if (STATS.includes(b.stat) && (alloc[b.stat] || 0) < TUNE_MAX) alloc[b.stat] = (alloc[b.stat] || 0) + 1;
+    await spend(uid, k, tunePointCost(t.pts || 0), { tune: { ...t, pts: (t.pts || 0) + 1, alloc } });
+    return bootstrap(uid);
+  },
+
+  // Re-allocate points. Free if it only places unspent points; otherwise costs RETUNE_COST.
+  async ft_alloc(uid, b) {
+    const k = await ownKaiju(uid, b.kaiju_id);
+    const t = k.tune;
+    if (!t?.on) throw new Fail('Unlock Fine Tune first.');
+    const alloc: Record<string, number> = {};
+    for (const st of STATS) {
+      const v = Math.trunc(Number(b.alloc?.[st]) || 0);
+      if (v < -TUNE_MAX || v > TUNE_MAX) throw new Fail(`Each stat can be tuned ${TUNE_MAX} steps up or down.`);
+      if (v) alloc[st] = v;
+    }
+    if (allocNet(alloc) > (t.pts || 0)) throw new Fail('Not enough tuning points.');
+    const old = t.alloc || {};
+    const onlyAdds = STATS.every((st: string) => (alloc[st] || 0) >= (old[st] || 0));
+    await spend(uid, k, onlyAdds ? 0 : RETUNE_COST, { tune: { ...t, alloc } });
+    return bootstrap(uid);
+  },
+
+  // Apply, swap or remove a skill mod. Removing is free; applying/swapping costs MOD_COST.
+  async ft_mod(uid, b) {
+    const k = await ownKaiju(uid, b.kaiju_id);
+    const t = k.tune;
+    if (!t?.on) throw new Fail('Unlock Fine Tune first.');
+    const id = String(b.ability || ''), ab = ABILITY_BY_ID[id];
+    const owns = ab && (FRAME_BY_ID[k.frame].basic === id || k.unlocked.includes(id));
+    if (!owns) throw new Fail('This Kaiju does not have that ability.');
+    const mods = { ...(t.mods || {}) };
+    if (!b.mod) { delete mods[id]; await spend(uid, k, 0, { tune: { ...t, mods } }); return bootstrap(uid); }
+    if (!MODS[b.mod] || !modAllowed(ab, b.mod)) throw new Fail('That mod does not fit this ability.');
+    if (mods[id] === b.mod) throw new Fail('Already has that mod.');
+    mods[id] = b.mod;
+    await spend(uid, k, MOD_COST, { tune: { ...t, mods } });
     return bootstrap(uid);
   },
 

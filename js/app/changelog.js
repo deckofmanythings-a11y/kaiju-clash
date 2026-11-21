@@ -3,6 +3,15 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.11.0', date: '2026-11-21',
+    added: [
+      '★ Fine Tune: once a Kaiju reaches 1200 Elo, unlock Fine Tune for it in the Lab. Raise or lower individual stats in small steps (lowering one frees a point for another), and add a skill mod to any ability: Overcharged, Efficient, Rapid, Precise, Potent or Lasting.',
+      'Fine Tuned Kaiju wear a gold ★ next to their name.',
+      'The Codex explains Fine Tune with every price and number.',
+    ],
+    changed: ['Battle engine v4 (adds Fine Tune). Old replays still play back exactly as they happened.'],
+  },
+  {
     v: '1.10.0', date: '2026-11-21',
     added: [
       'The Codex: a new tab with every rule and number the battle engine uses, including the damage formula, accuracy, crits, initiative, energy, status effects, resistances, arenas, how Kaiju pick moves, rewards and injury odds.',

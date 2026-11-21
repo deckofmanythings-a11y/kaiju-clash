@@ -5,8 +5,12 @@ import { FRAME_BY_ID, STATS, effectiveStats, PASSIVES } from '../data/frames.js'
 import { ABILITY_BY_ID, STATUSES, abilityAvailableTo, MAX_EQUIPPED } from '../data/abilities.js';
 import { ENV_BY_ID } from '../data/environments.js';
 import { INJURY_BY_ID, MAX_INJURIES, applyInjuries } from '../data/injuries.js';
+import { sanitizeTune, modAbility } from '../data/finetune.js';
 
-export const ENGINE_VERSION = 3; // v2: persistent injuries lower stats. v3: frame passives (rare Wild enemies)
+export const ENGINE_VERSION = 4; // v2: persistent injuries lower stats. v3: frame passives (rare Wild enemies). v4: Fine Tune
+// Older versions whose records replay identically on this engine (v4 only adds optional Fine Tune data).
+export const COMPAT_VERSIONS = [3, 4];
+export const engineCompatible = (v) => COMPAT_VERSIONS.includes(v);
 const MAX_ACTIONS = 80;          // 40 rounds
 const GAUGE = 1000;              // initiative threshold
 const START_ENERGY = 20;
@@ -35,10 +39,13 @@ export function sanitizeSnapshot(s) {
     if (abilities.length >= MAX_EQUIPPED) break;
   }
   const injuries = [...new Set(Array.isArray(s.injuries) ? s.injuries : [])].filter(id => INJURY_BY_ID[id]).slice(0, MAX_INJURIES);
-  return {
+  const out = {
     id: String(s.id || ''), name: String(s.name || 'Unnamed').slice(0, 24), frame: frame.id,
     levels, abilities, injuries, colors: { ...frame.colors, ...(s.colors || {}) }, owner: s.owner ? String(s.owner).slice(0, 32) : undefined,
   };
+  const tune = sanitizeTune(s.tune, [frame.basic, ...abilities]);
+  if (tune) out.tune = tune;   // only present when tuned, so untuned snapshots are unchanged from v3
+  return out;
 }
 
 function envStats(snapshot, env) {
@@ -69,7 +76,7 @@ export function simulateBattle({ seed, env: envId, a, b }) {
     return {
       i, s, frame, stats, maxHp: stats.hp, hp: stats.hp, energy: START_ENERGY,
       gauge: 0, statuses: [], cds: {}, passive: frame.passive || null, pUsed: false, pPending: false,
-      kit: [frame.basic, ...s.abilities].map(id => ABILITY_BY_ID[id]),
+      kit: [frame.basic, ...s.abilities].map(id => modAbility(ABILITY_BY_ID[id], s.tune?.mods?.[id])),
     };
   });
 
@@ -338,7 +345,7 @@ export function simulateBattle({ seed, env: envId, a, b }) {
 
 // Re-simulate a stored record and confirm it matches. Returns { ok, record }.
 export function verifyReplay(record) {
-  if (record.v !== ENGINE_VERSION) return { ok: false, stale: true, record };
+  if (!engineCompatible(record.v)) return { ok: false, stale: true, record };
   const re = simulateBattle({ seed: record.seed, env: record.env, a: record.fighters[0], b: record.fighters[1] });
   return { ok: re.hash === record.hash, record: re };
 }

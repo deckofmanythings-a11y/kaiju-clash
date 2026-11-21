@@ -1,3 +1,4 @@
+import { applyTune } from './finetune.js';
 // 12 core Kaiju frames. Stats are integers. Effective stat = base + growth * level (level 0..10).
 // `plan` is the 3D body plan the renderer builds. `tags` gate shared abilities.
 // `resist` is a percentage damage multiplier per damage type (100 = normal, 50 = half, 150 = weak).
@@ -195,11 +196,12 @@ export const RARE_FRAME_IDS = WILD_FRAMES.map(f => f.id);
 
 export const FRAME_BY_ID = Object.fromEntries([...FRAMES, ...WILD_FRAMES].map(f => [f.id, f]));
 
+// Includes Fine Tune steps (kaiju.tune), before injuries.
 export function effectiveStats(kaiju) {
   const f = FRAME_BY_ID[kaiju.frame];
   const out = {};
   for (const s of STATS) out[s] = f.base[s] + f.growth[s] * (kaiju.levels?.[s] || 0);
-  return out;
+  return applyTune(out, kaiju.tune);
 }
 
 // 0..3 visual tier per stat, used by the renderer to add/grow parts.

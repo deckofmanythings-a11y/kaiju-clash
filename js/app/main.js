@@ -2,17 +2,18 @@ import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES, STAT_BLURBS, MAX_STAT_LEVEL, ef
 import { ABILITY_BY_ID, STATUSES, MAX_EQUIPPED, abilitiesForFrame, abilityScope } from '../data/abilities.js';
 import { ENV_BY_ID, ENVIRONMENTS } from '../data/environments.js';
 import { statUpgradeCost, powerRating, battleReward, RARE_REWARD_MULT } from '../data/economy.js';
-import { simulateBattle, verifyReplay, ENGINE_VERSION } from '../engine/battle.js';
+import { simulateBattle, verifyReplay, ENGINE_VERSION, engineCompatible } from '../engine/battle.js?v=4';   // versioned: a cached v3 battle.js lacks engineCompatible
 import { randomSeed, createRng } from '../engine/rng.js';
 import { INJURY_BY_ID, conditionOf, deathChance, healCost, applyInjuries } from '../data/injuries.js';
 import * as codes from './codes.js';
 import * as api from './api.js';
 import { CHANGELOG } from './changelog.js';
 import { codexHtml, renderAbilityList, statMath, abilityMath } from './codex.js';
+import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS, MOD_IDS, modAllowed, modAbility, allocNet } from '../data/finetune.js';
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html,
 // and add a player-facing entry to js/app/changelog.js.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.0';
 
 // Version line doubles as the changelog button; a dot marks updates you haven't opened yet.
 const SEEN_KEY = 'kb-seen-version';
@@ -119,6 +120,8 @@ async function act(action, payload, { rerender = true } = {}) {
 const liveInjuries = (k) => (k?.injuries || []).filter(i => INJURY_BY_ID[i.id] && Date.parse(i.heals_at) > Date.now());
 const injIds = (k) => liveInjuries(k).map(i => i.id);
 const snap = (k, extra = {}) => ({ ...k, injuries: injIds(k), ...extra });   // what the engine/renderer see
+const star = (x) => (x?.tune?.on ? '<span class="ftstar" title="Fine Tuned">★</span> ' : '');
+let tuneDraft = null;   // { kaijuId, alloc } while the player is editing tuning steps
 const injText = (id) => Object.entries(INJURY_BY_ID[id].mods).map(([k, v]) => `${v}% ${STAT_NAMES[k]}`).join(', ');
 const timeLeft = (iso) => { const m = Math.max(0, Math.ceil((Date.parse(iso) - Date.now()) / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
 function condBadge(ids) {
@@ -254,7 +257,7 @@ function hangar() {
     ${limitBanner()}
     ${me.kaiju.map(x => `
       <div class="card click ${x.id === k.id ? 'sel' : ''}" data-pick="${x.id}">
-        <div class="row"><b class="grow">${esc(x.name)}${x.id === k.id ? ' <span class="tag ex">Active</span>' : ''}</b><span class="elo">${x.elo}</span></div>
+        <div class="row"><b class="grow">${star(x)}${esc(x.name)}${x.id === k.id ? ' <span class="tag ex">Active</span>' : ''}</b><span class="elo">${x.elo}</span></div>
         <div class="rec">${condBadge(injIds(x))} ${FRAME_BY_ID[x.frame].name} · Power ${powerRating(x)} · <span class="w">${x.wins}W</span> <span class="l">${x.losses}L</span> ${x.draws}D · Defense ${x.def_wins}–${x.def_losses}</div>
       </div>`).join('')}
     <div class="row" style="margin-top:12px"><button class="btn ghost grow" data-go="creator" ${me.kaiju.length >= MAX_KAIJU ? 'disabled' : ''}>+ New Kaiju</button><button class="btn grow" data-go="arena">To the Arena</button></div>
@@ -329,6 +332,49 @@ function creator() {
 }
 
 // ---------- Lab ----------
+// ---------- Fine Tune (Lab) ----------
+const modded = (k, a) => modAbility(a, k.tune?.mods?.[a.id]);
+const modTag = (k, a) => { const m = k.tune?.mods?.[a.id]; return m ? ` <span class="tag ftmod" title="${MODS[m].desc}">★ ${MODS[m].name}</span>` : ''; };
+function modPicker(k, a, owned) {
+  if (!k.tune?.on || !owned) return '';
+  const opts = MOD_IDS.filter(m => modAllowed(a, m));
+  if (!opts.length) return '';
+  const cur = k.tune.mods?.[a.id] || '';
+  return `<label class="modpick">Skill mod <select data-mod="${a.id}"><option value="">None</option>${opts.map(m => `<option value="${m}" ${m === cur ? 'selected' : ''}>${MODS[m].name}: ${MODS[m].desc}</option>`).join('')}</select> <span class="rec">${MOD_COST} BIO to apply or swap</span></label>`;
+}
+function draftFor(k) {
+  if (!tuneDraft || tuneDraft.kaijuId !== k.id) tuneDraft = { kaijuId: k.id, alloc: { ...(k.tune?.alloc || {}) } };
+  return tuneDraft;
+}
+const retuneCost = (k, alloc) => (STATS.every(s => (alloc[s] || 0) >= (k.tune?.alloc?.[s] || 0)) ? 0 : RETUNE_COST);
+function fineTuneHtml(k, bio) {
+  const t = k.tune;
+  if (!t?.on) {
+    const ready = k.elo >= FT_ELO;
+    return `<div class="ftbox locked"><div class="ft-h">★ Fine Tune <span class="rec">${ready ? 'available' : `unlocks at ${FT_ELO} Elo`}</span></div>
+      <p>Late-game tuning for one Kaiju: raise or lower individual stats in small steps (±1 Might, Energy, Armor, Speed or Focus, or ±40 HP; up to ${TUNE_MAX} each way), and put a <b>skill mod</b> on any ability (more power, cheaper, faster cooldown, more accurate, stronger or longer effects). Fine Tuned Kaiju wear a gold ★.</p>
+      <p class="rec">Priced to be roughly break-even with a Kaiju's last normal upgrades: worth it for the extra control, not a shortcut. Exact prices and effects are in the Codex.</p>
+      ${ready ? `<button class="btn" id="ftunlock" ${bio < FT_UNLOCK_COST ? 'disabled title="Not enough Biomass"' : ''}>Unlock Fine Tune · ${FT_UNLOCK_COST} BIO</button>`
+        : `<div class="ftbar"><i style="width:${Math.max(0, Math.min(100, Math.round(k.elo * 100 / FT_ELO)))}%"></i></div><p class="rec">${k.name} is at <b>${k.elo}</b> Elo. ${FT_ELO - k.elo} to go.</p>`}
+    </div>`;
+  }
+  const d = draftFor(k), used = allocNet(d.alloc), free = t.pts - used, dirty = JSON.stringify(d.alloc) !== JSON.stringify(t.alloc || {});
+  const nextCost = t.pts < TUNE_MAX_PTS ? tunePointCost(t.pts) : null, rc = retuneCost(k, d.alloc);
+  return `<div class="ftbox"><div class="ft-h">★ Fine Tune</div>
+    <p class="rec">Tuning points: <b>${t.pts}</b> bought (max ${TUNE_MAX_PTS}) · <b>${free}</b> free. Lowering a stat frees a point for another one.</p>
+    ${STATS.map(s => { const v = d.alloc[s] || 0; return `<div class="tune"><span class="nm">${STAT_NAMES[s]}</span>
+      <button class="btn small ghost" data-tstat="${s}" data-tstep="-1" ${v <= -TUNE_MAX ? 'disabled' : ''}>−</button>
+      <span class="tv ${v > 0 ? 'w' : v < 0 ? 'l' : 'rec'}">${v > 0 ? '+' : ''}${v * TUNE_STEP[s]}</span>
+      <button class="btn small ghost" data-tstat="${s}" data-tstep="1" ${v >= TUNE_MAX ? 'disabled' : ''}>+</button>
+      <span class="rec">${v > 0 ? '+' : ''}${v} step${Math.abs(v) === 1 ? '' : 's'} (${TUNE_STEP[s]} each)</span></div>`; }).join('')}
+    <div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap">
+      ${dirty ? `<button class="btn small" id="tapply">Apply tuning${rc ? ` · ${rc} BIO` : ''}</button><button class="btn small ghost" id="treset">Undo</button>` : ''}
+      ${nextCost !== null ? `<button class="btn small ghost" id="tbuy" ${bio < nextCost ? 'disabled title="Not enough Biomass"' : ''}>Buy tuning point · ${nextCost} BIO</button>` : '<span class="rec">All tuning points bought.</span>'}
+    </div>
+    <p class="rec" style="margin-top:8px">Skill mods: pick one per ability in the list below (${MOD_COST} BIO to apply or swap, free to remove).</p>
+  </div>`;
+}
+
 function lab() {
   const k = active(), f = FRAME_BY_ID[k.frame], base = effectiveStats(k), st = applyInjuries(base, injIds(k)), bio = me.player.bio;
   const inj = liveInjuries(k), now = Date.now(), dc = deathChance(injIds(k));
@@ -337,7 +383,7 @@ function lab() {
   const groups = [['Exclusive', pool.filter(a => a.frames)], ['Shared', pool.filter(a => a.tags)], ['Universal', pool.filter(a => a.universal)]];
   const basic = ABILITY_BY_ID[f.basic];
   panel.innerHTML = `
-    <h2>${esc(k.name)}</h2><p class="sub">${f.name} · Power ${powerRating(k)} · Elo <span class="elo">${k.elo}</span><br>Upgrades at levels 3, 6 and 9 change how it looks.</p>
+    <h2>${star(k)}${esc(k.name)}</h2><p class="sub">${f.name} · Power ${powerRating(k)} · Elo <span class="elo">${k.elo}</span><br>Upgrades at levels 3, 6 and 9 change how it looks.</p>
     <h3>Condition: ${condBadge(injIds(k))}</h3>
     ${dc ? `<div class="warn">⚠ <b>${esc(k.name)} is Critical.</b> If it's knocked out in a fight you start, there's a <b>${dc}%</b> chance it dies for good. Heal it, or let it rest.</div>` : ''}
     ${inj.length ? inj.map(i => { const c = healCost(i, Date.parse(i.heals_at) - now), d = INJURY_BY_ID[i.id]; return `<div class="card ab"><div><b>${d.name}</b> <span class="tag ${d.severity === 2 ? 'ex' : ''}">${d.severity === 2 ? 'Major' : 'Minor'}</span>
@@ -356,16 +402,17 @@ function lab() {
       ${(() => { const m = statMath(st, f, k.levels); return STATS.map(s => `<div class="mrow"><b>${STAT_NAMES[s]} ${st[s]}</b><div>${m[s]}</div></div>`).join(''); })()}
       <p class="rec">Full rules, formulas and every ability's numbers are in the <a href="#" data-go="codex">Codex</a>.</p>
     </details>
+    ${fineTuneHtml(k, bio)}
     <h3>Abilities <span style="font-size:14px">(${k.abilities.length}/${MAX_EQUIPPED} equipped)</span></h3>
-    <div class="card ab"><b>${basic.name}</b><span class="tag">Basic · always on</span><div class="desc">${describe(basic)}</div>${abilityMath(basic, st)}</div>
+    <div class="card ab"><b>${basic.name}</b><span class="tag">Basic · always on</span>${modTag(k, basic)}<div class="desc">${describe(modded(k, basic))}</div>${abilityMath(modded(k, basic), st)}${modPicker(k, basic, true)}</div>
     ${groups.map(([label, list]) => list.length ? `<h3>${label}</h3>` + list.map(a => {
       const owned = k.unlocked.includes(a.id), eq = k.abilities.includes(a.id);
       const cls = a.frames ? 'ex' : a.universal ? 'un' : '';
       const action = !owned
         ? `<button class="btn small" data-buy="${a.id}" ${bio < a.price ? 'disabled' : ''}>Unlock ${a.price}</button>`
         : `<button class="btn small ${eq ? '' : 'ghost'}" data-eq="${a.id}">${eq ? 'Equipped' : 'Equip'}</button>`;
-      return `<div class="card ab ${eq ? 'sel' : ''}"><div><b>${a.name}</b> <span class="tag ${cls}">${abilityScope(a)}</span>
-        <div class="meta">${a.cost ? a.cost + ' energy' : 'free'}${a.cd ? ' · ' + a.cd + ' turn cooldown' : ''}${a.vis ? ' · changes look' : ''}</div></div>${action}<div class="desc">${describe(a)}</div>${abilityMath(a, st)}</div>`;
+      return `<div class="card ab ${eq ? 'sel' : ''}"><div><b>${a.name}</b> <span class="tag ${cls}">${abilityScope(a)}</span>${modTag(k, a)}
+        <div class="meta">${a.cost ? a.cost + ' energy' : 'free'}${a.cd ? ' · ' + a.cd + ' turn cooldown' : ''}${a.vis ? ' · changes look' : ''}</div></div>${action}<div class="desc">${describe(modded(k, a))}</div>${abilityMath(modded(k, a), st)}${modPicker(k, a, owned)}</div>`;
     }).join('') : '').join('')}
     <h3>Name & colors</h3>
     <input type="text" id="kname" maxlength="24" value="${esc(k.name)}">
@@ -383,6 +430,22 @@ function lab() {
       if (r && [3, 6, 9].includes(active().levels[up.dataset.up])) toast(`${k.name} is mutating`);
     }
     if (buy) await act('unlock', { kaiju_id: k.id, ability: buy.dataset.buy });
+    if (e.target.id === 'ftunlock' && confirm(`Unlock Fine Tune for ${k.name} for ${FT_UNLOCK_COST} BIO?`)) await act('ft_unlock', { kaiju_id: k.id });
+    const ts = e.target.closest('[data-tstep]');
+    if (ts) {
+      const d = draftFor(k), s = ts.dataset.tstat, v = (d.alloc[s] || 0) + +ts.dataset.tstep;
+      if (v < -TUNE_MAX || v > TUNE_MAX) return;
+      if (+ts.dataset.tstep > 0 && allocNet(d.alloc) + 1 > k.tune.pts) return toast('No free tuning points: buy one, or lower another stat first.');
+      d.alloc = { ...d.alloc, [s]: v }; if (!v) delete d.alloc[s];
+      const y = panel.scrollTop; lab(); panel.scrollTop = y; return;
+    }
+    if (e.target.id === 'tbuy') { tuneDraft = null; await act('ft_point', { kaiju_id: k.id }); }
+    if (e.target.id === 'treset') { tuneDraft = null; const y = panel.scrollTop; lab(); panel.scrollTop = y; }
+    if (e.target.id === 'tapply') {
+      const d = draftFor(k), cost = retuneCost(k, d.alloc);
+      if (cost && !confirm(`Lowering tuned steps costs ${cost} BIO. Apply?`)) return;
+      const r = await act('ft_alloc', { kaiju_id: k.id, alloc: d.alloc }); if (r) tuneDraft = null;
+    }
     const hl = e.target.closest('[data-heal]');
     if (hl) { const r = await act('heal', { kaiju_id: k.id, injury: hl.dataset.heal }); if (r) toast('Healed'); }
     if (eq) {
@@ -392,6 +455,13 @@ function lab() {
       await act('equip', { kaiju_id: k.id, abilities: list });
     }
     if (e.target.id === 'savecos') await act('cosmetic', { kaiju_id: k.id, name: $('#kname').value, colors: k.colors });
+  };
+  panel.onchange = async (e) => {
+    const sel = e.target.closest('[data-mod]'); if (!sel) return;
+    const id = sel.dataset.mod, mod = sel.value, ab = ABILITY_BY_ID[id];
+    if (mod && !confirm(`Apply ${MODS[mod].name} to ${ab.name} for ${MOD_COST} BIO?\n\n${MODS[mod].desc}`)) { sel.value = k.tune?.mods?.[id] || ''; return; }
+    if (!mod && !confirm(`Remove the mod from ${ab.name}? (free, but re-applying costs ${MOD_COST} BIO)`)) { sel.value = k.tune?.mods?.[id] || ''; return; }
+    await act('ft_mod', { kaiju_id: k.id, ability: id, mod: mod || null });
   };
   panel.oninput = (e) => {
     if (e.target.dataset.col) { k.colors = { ...k.colors, [e.target.dataset.col]: e.target.value }; refreshShowcase(); }
@@ -555,7 +625,7 @@ function replayTags(h) {
   if (h.winner === 0 || h.winner === 1) {
     const w = h.fighters[h.winner], l = h.fighters[1 - h.winner];
     t.underdog = powerRating(w) * 100 <= powerRating(l) * (100 - UNDERDOG_PCT);
-    if (h.seed != null && h.engine_v === ENGINE_VERSION) {
+    if (h.seed != null && engineCompatible(h.engine_v)) {
       try {
         const r = simulateBattle({ seed: Number(h.seed), env: h.env, a: h.fighters[0], b: h.fighters[1] });
         if (r.winner === h.winner) t.close = r.finalHp[h.winner] * 100 < r.meta[h.winner].maxHp * CLOSE_PCT;
@@ -648,7 +718,7 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
   hud.innerHTML = `
     ${record.fighters.map((f, i) => `
       <div class="fighter f${i}">
-        <div class="nm">${esc(f.name)}</div>
+        <div class="nm">${star(f)}${esc(f.name)}</div>
         <div class="fr">${FRAME_BY_ID[f.frame].name}${f.owner ? ' · ' + esc(f.owner) : ''}</div>
         <div class="hp"><u></u><i></i><span></span></div>
         <div class="en"><i></i></div>
