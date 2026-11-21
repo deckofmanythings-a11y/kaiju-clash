@@ -11,7 +11,7 @@ import { CHANGELOG } from './changelog.js';
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html,
 // and add a player-facing entry to js/app/changelog.js.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.9.0';
 
 // Version line doubles as the changelog button; a dot marks updates you haven't opened yet.
 const SEEN_KEY = 'kb-seen-version';
@@ -525,29 +525,74 @@ async function ladderScreen() {
 }
 
 // ---------- Replays ----------
+const CLOSE_PCT = 5;      // winner finished under this % HP
+const UNDERDOG_PCT = 10;  // winner had at least this % less Power than the loser
+const tagCache = new Map();
+// Tags for one history row: { close, underdog, frames }. "Close" needs a local re-sim (seed + current engine).
+function replayTags(h) {
+  if (tagCache.has(h.id)) return tagCache.get(h.id);
+  const t = { close: false, underdog: false, frames: [...new Set(h.fighters.map(f => f.frame))] };
+  if (h.winner === 0 || h.winner === 1) {
+    const w = h.fighters[h.winner], l = h.fighters[1 - h.winner];
+    t.underdog = powerRating(w) * 100 <= powerRating(l) * (100 - UNDERDOG_PCT);
+    if (h.seed != null && h.engine_v === ENGINE_VERSION) {
+      try {
+        const r = simulateBattle({ seed: Number(h.seed), env: h.env, a: h.fighters[0], b: h.fighters[1] });
+        if (r.winner === h.winner) t.close = r.finalHp[h.winner] * 100 < r.meta[h.winner].maxHp * CLOSE_PCT;
+      } catch { /* bad snapshot: no tag */ }
+    }
+  }
+  tagCache.set(h.id, t);
+  return t;
+}
+const repFilter = { res: 'all', close: false, underdog: false, frame: '' };
 async function replays() {
   panel.innerHTML = `<h2>Replays</h2><p class="sub">Loading…</p>`;
   try { history = (await api.call('history')).history; } catch (e) { toast(e.message); return; }
   if (screen !== 'replays') return;
-  panel.innerHTML = `
-    <h2>Replays</h2><p class="sub">Every fight is stored as a seed plus two Kaiju snapshots. Replaying re-runs the engine and checks it matches the server's result.</p>
-    ${history.length ? history.map((h, i) => {
-      const res = h.winner === null ? 'draw' : h.winner === h.side ? 'win' : 'loss';
+  const frames = [...new Set(history.flatMap(h => h.fighters.map(f => f.frame)))].filter(id => FRAME_BY_ID[id]).sort((a, b) => FRAME_BY_ID[a].name.localeCompare(FRAME_BY_ID[b].name));
+  if (repFilter.frame && !frames.includes(repFilter.frame)) repFilter.frame = '';
+  const resOf = h => (h.winner === null ? 'draw' : h.winner === h.side ? 'win' : 'loss');
+  const fchip = id => { const f = FRAME_BY_ID[id]; return f ? `<span class="tag ftag" style="--fc:${f.colors.accent}">${f.name}</span>` : ''; };
+  const render = () => {
+    const rows = history.map((h, i) => ({ h, i, t: replayTags(h), res: resOf(h) })).filter(({ t, res }) =>
+      (repFilter.res === 'all' || res === repFilter.res) && (!repFilter.close || t.close) && (!repFilter.underdog || t.underdog) && (!repFilter.frame || t.frames.includes(repFilter.frame)));
+    $('#replist').innerHTML = rows.length ? rows.map(({ h, i, t, res }) => {
       const reward = h.side === 0 ? h.reward : h.defense_reward, delta = h.side === 0 ? h.elo_delta_a : h.elo_delta_d;
-      return `<div class="card click" data-rep="${i}">
+      return `<div class="card click rep${t.close ? ' is-close' : ''}${t.underdog ? ' is-under' : ''}" data-rep="${i}">
         <div class="row"><b class="grow">${esc(h.fighters[0].name)} vs ${esc(h.fighters[1].name)}</b>
           <span class="${res === 'win' ? 'w' : res === 'loss' ? 'l' : 'rec'}">${res.toUpperCase()}</span></div>
+        <div class="reptags">${t.close ? `<span class="tag tclose" title="The winner finished with under ${CLOSE_PCT}% health">🔥 Close battle</span>` : ''}${t.underdog ? `<span class="tag tunder" title="The winner had at least ${UNDERDOG_PCT}% less Power than the loser">⚡ Underdog win</span>` : ''}${t.frames.map(fchip).join('')}</div>
         <div class="rec">${h.side === 0 ? 'Attack' : 'Defense'} · ${ENV_BY_ID[h.env]?.name || h.env} · ${new Date(h.created_at).toLocaleString()}${reward ? ' · +' + reward + ' BIO' : ''}${delta ? ` · <span class="${delta > 0 ? 'delta-up' : 'delta-dn'}">${delta > 0 ? '+' : ''}${delta} Elo</span>` : ''}${h.rated ? '' : ' · unrated'}${h.aftermath?.[h.side]?.died ? ' · <b class="l">☠ died</b>' : h.aftermath?.[h.side]?.injury ? ' · 🩸 ' + INJURY_BY_ID[h.aftermath[h.side].injury].name : ''}</div>
       </div>`;
-    }).join('') : '<p class="rec">No fights yet.</p>'}
+    }).join('') : `<p class="rec">${history.length ? 'No replays match these filters.' : 'No fights yet.'}</p>`;
+    const cnt = $('#repcount'); if (cnt) cnt.textContent = `Showing ${rows.length} of ${history.length}`;
+    for (const b of panel.querySelectorAll('[data-fres]')) b.classList.toggle('on', b.dataset.fres === repFilter.res);
+    for (const b of panel.querySelectorAll('[data-ftog]')) b.classList.toggle('on', repFilter[b.dataset.ftog]);
+  };
+  panel.innerHTML = `
+    <h2>Replays</h2><p class="sub">Every fight is stored as a seed plus two Kaiju snapshots. Replaying re-runs the engine and checks it matches the server's result.</p>
+    ${history.length ? `<div class="repfilter">
+      <div class="seg">${['all', 'win', 'loss', 'draw'].map(r => `<button class="fbtn" data-fres="${r}">${({ all: 'All', win: 'Wins', loss: 'Losses', draw: 'Draws' })[r]}</button>`).join('')}</div>
+      <button class="fbtn tclose" data-ftog="close" title="Winner finished with under ${CLOSE_PCT}% health">🔥 Close</button>
+      <button class="fbtn tunder" data-ftog="underdog" title="Winner had at least ${UNDERDOG_PCT}% less Power">⚡ Underdog</button>
+      <select id="ffr"><option value="">All monster types</option>${frames.map(id => `<option value="${id}" ${repFilter.frame === id ? 'selected' : ''}>${FRAME_BY_ID[id].name}</option>`).join('')}</select>
+      <span class="rec" id="repcount"></span>
+    </div>` : ''}
+    <div id="replist"></div>
     <h3>Watch a replay code</h3>
     <textarea id="rcode" placeholder="KR1.…"></textarea>
     <button class="btn small" id="watch" style="margin-top:6px">Watch</button>`;
+  render();
   panel.onclick = (e) => {
+    const fr = e.target.closest('[data-fres]'), ft = e.target.closest('[data-ftog]');
+    if (fr) { repFilter.res = fr.dataset.fres; render(); return; }
+    if (ft) { repFilter[ft.dataset.ftog] = !repFilter[ft.dataset.ftog]; render(); return; }
     const r = e.target.closest('[data-rep]');
     if (r) watchBattleId(history[+r.dataset.rep].id);
     if (e.target.id === 'watch') watchCode($('#rcode').value);
   };
+  $('#ffr')?.addEventListener('change', (e) => { repFilter.frame = e.target.value; render(); });
 }
 
 // ---------- Defense report ----------

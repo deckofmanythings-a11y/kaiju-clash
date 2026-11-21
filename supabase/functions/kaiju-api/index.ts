@@ -363,7 +363,7 @@ const actions: Record<string, (uid: string, b: any) => Promise<unknown>> = {
   },
 
   async history(uid) {
-    const rows = must(await db.from('kb_battles').select('id, created_at, attacker_owner, defender_owner, env, fighters, winner, reason, reward, defense_reward, elo_delta_a, elo_delta_d, rated, aftermath')
+    const rows = must(await db.from('kb_battles').select('id, created_at, attacker_owner, defender_owner, engine_v, seed, env, fighters, winner, reason, reward, defense_reward, elo_delta_a, elo_delta_d, rated, aftermath')
       .or(`attacker_owner.eq.${uid},defender_owner.eq.${uid}`).order('created_at', { ascending: false }).limit(30), 'history') as any[];
     return { history: rows.map(r => ({ ...r, side: r.attacker_owner === uid ? 0 : 1, attacker_owner: undefined, defender_owner: undefined })) };
   },

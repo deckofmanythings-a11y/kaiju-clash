@@ -207,3 +207,21 @@ input[type=color] { width: 38px; height: 30px; border: 1px solid var(--line); ba
 .cl-chg { background: rgba(96,165,250,.18); color: #93c5fd; }
 .cl-fix { background: rgba(245,158,11,.18); color: #fcd34d; }
 .cl-rem { background: rgba(239,68,68,.18); color: #fca5a5; }
+
+/* Replay filters + tags (1.9.0) */
+.repfilter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 10px; }
+.repfilter .seg { display: inline-flex; border: 1px solid rgba(255,255,255,.15); border-radius: 8px; overflow: hidden; }
+.repfilter .seg .fbtn { border: 0; border-radius: 0; }
+.fbtn { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.15); color: inherit; border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+.fbtn.on { background: rgba(58,208,255,.2); color: #fff; }
+.fbtn.tclose.on { background: rgba(255,120,40,.3); border-color: rgba(255,140,60,.8); }
+.fbtn.tunder.on { background: rgba(168,85,247,.3); border-color: rgba(192,132,252,.8); }
+.repfilter select { background: rgba(255,255,255,.05); color: inherit; border: 1px solid rgba(255,255,255,.15); border-radius: 8px; padding: 5px 8px; font-size: 12px; }
+.repfilter select option { background: #12151c; }
+.reptags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+.tag.tclose { background: rgba(255,120,40,.18); color: #ffb37a; }
+.tag.tunder { background: rgba(168,85,247,.2); color: #d8b4fe; }
+.tag.ftag { background: color-mix(in srgb, var(--fc) 16%, transparent); color: color-mix(in srgb, var(--fc) 70%, #fff); }
+.card.rep.is-close { border-left: 3px solid #ff8a3d; }
+.card.rep.is-under { border-left: 3px solid #a855f7; }
+.card.rep.is-close.is-under { border-left: 3px solid; border-image: linear-gradient(#ff8a3d, #a855f7) 1; }

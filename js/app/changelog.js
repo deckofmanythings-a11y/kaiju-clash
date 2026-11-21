@@ -3,6 +3,13 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.9.0', date: '2026-11-20',
+    added: [
+      'Replay filters: show only wins, losses or draws, close battles, underdog wins, or fights involving a particular monster type.',
+      'Replays are now tagged: 🔥 Close battle (the winner finished under 5% health), ⚡ Underdog win (the winner had at least 10% less Power), plus the monster types that fought.',
+    ],
+  },
+  {
     v: '1.8.1', date: '2026-11-20',
     changed: ['Tidied up the changelog wording.'],
   },
