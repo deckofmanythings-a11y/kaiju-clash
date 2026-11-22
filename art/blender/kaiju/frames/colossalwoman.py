@@ -75,6 +75,9 @@ class TornSkirt:
 
 class Giantess(Fig):
     """Fig with a realistic adult female head, bare feet and curled 'claw' hands."""
+    # 'L' joints sit at -x, which is her anatomical RIGHT (she faces +z), so the default thumb side built a left hand on
+    # the right arm and vice versa (user report, 1.12.0). Mirror the thumb for every hand kind (claw and fist).
+    THUMB_FLIP = -1
 
     def foot(self, B, sd):
         J, q = self.J, self.q
@@ -187,7 +190,7 @@ class Giantess(Fig):
         hq = q * 0.82 * p.get('handS', 1.0)
         fr = 0.85
         R = self.hand_frame(sd)
-        ts = 1 if sd == 'L' else -1
+        ts = (1 if sd == 'L' else -1) * self.THUMB_FLIP
         wr = J['wr' + sd]
         L = lambda v: wr + R @ (np.asarray(v, float) * hq)
         B = S.SDF()

@@ -409,7 +409,7 @@ class Fig:
         hq = q * (0.82 if fem else 1.0) * p.get('handS', 1.0)
         fr = 0.85 if fem else 1.0                        # finger slimness
         R = self.hand_frame(sd)
-        ts = 1 if sd == 'L' else -1                      # thumb side in local x (palm faces -z)
+        ts = (1 if sd == 'L' else -1) * getattr(self, 'THUMB_FLIP', 1)   # thumb side in local x (palm faces -z); subclasses can mirror it
         wr = J['wr' + sd]
         L = lambda v: wr + R @ (np.asarray(v, float) * hq)
         B = S.SDF()

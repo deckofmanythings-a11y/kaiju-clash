@@ -30,8 +30,8 @@ const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const smooth = (x) => { x = clamp01(x); return x * x * (3 - 2 * x); };
 const BASE_URL = new URL('../../assets/models/', import.meta.url);
 const HP_SIZE = [1, 1.1, 1.22, 1.36]; // mirrors kaiju-model.js (tiny frames cancel the kaiju HP sizing)
-const GLOW_K = 0.5;
-const ASSET_V = '1';                // bump when re-exporting GLBs (GitHub Pages caches by URL)                   // GLB emission strengths are authored for Blender; tame them for bloom
+const GLOW_K = 0.5;                  // GLB emission strengths are authored for Blender; tame them for bloom
+const ASSET_V = '1';                // bump when re-exporting ALL GLBs (GitHub Pages caches by URL); one re-export: give that frame its own `v` in GLB_FRAMES
 
 // Per-frame rig hints. Everything else is derived from bone names (see buildRig).
 export const GLB_FRAMES = {
@@ -48,7 +48,7 @@ export const GLB_FRAMES = {
   arachnid: { koMode: 'side' },
   stormray: { koMode: 'tilt', hover: 3.7, bank: 0.3 },
   giantbaby: { arm: { reach: -1.1, elbowReach: 0.45 } },
-  colossalwoman: {},
+  colossalwoman: { v: '2' },   // v2: hands mirrored onto the correct arms (1.12.1)
   mechasaurian: {},
   wasp: { koMode: 'side', hover: 2.6, wing: { speed: 16, amp: 0.55 } },   // a hornet buzzes, a moth flaps
   scorpion: { koMode: 'side' },
@@ -98,7 +98,7 @@ export function preloadFrames(ids) {
       e = { state: 'loading', used: 0 };
       cache.set(id, e);
       loader = loader || new GLTFLoader();
-      e.promise = loader.loadAsync(new URL(id + '.glb?v=' + ASSET_V, BASE_URL).href)
+      e.promise = loader.loadAsync(new URL(id + '.glb?v=' + (GLB_FRAMES[id].v || ASSET_V), BASE_URL).href)
         .then((gltf) => { prepare(id, e, gltf); e.state = 'ready'; })
         .catch((err) => { e.state = 'failed'; console.warn('[glb-models] could not load', id, '- using the procedural model', err); });
     }

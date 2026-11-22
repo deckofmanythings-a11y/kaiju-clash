@@ -3,6 +3,10 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.12.1', date: '2026-11-21',
+    fixed: ['Colossal Woman: her left and right hands were swapped (thumbs on the wrong side). Each hand is now on the correct arm.'],
+  },
+  {
     v: '1.12.0', date: '2026-11-21',
     added: [
       'Seven new Kaiju frames: Giant Baby, Colossal Woman, Mecha Saurian, Vespa Rex (hornet), Sandreaper (scorpion), Archfiend (demon) and Dire Lycan (werewolf). Each has its own basic attack, three exclusive abilities and a full 3D model with upgrade tiers.',

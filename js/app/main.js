@@ -13,7 +13,7 @@ import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCos
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html,
 // and add a player-facing entry to js/app/changelog.js.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.12.0';
+const APP_VERSION = '1.12.1';
 
 // Version line doubles as the changelog button; a dot marks updates you haven't opened yet.
 const SEEN_KEY = 'kb-seen-version';
