@@ -350,20 +350,31 @@ def build(K):
                 a = 2 * np.pi * i / 6 + 0.2
                 dv = nrm(np.cos(a) * x * 0.95 + np.sin(a) * z * 0.95 + y * 0.28 * (1 if i % 2 else -1))
                 K.crystal(part, c + dv * R * 0.92, dv, 0.25, r=0.1, cluster=False, bone='handR')
-        # teeth: two lower + two upper; grow into little fangs
+        # teeth: two lower + two upper; grow into little fangs. Each root is found by marching from inside the mouth
+        # cavity toward the gum until we hit flesh, so the teeth always grow out of the gum line (1.12.2: they floated).
         tl = 0.16 + 0.07 * t
+
+        def gum_hit(x, zf, up):
+            p = MOUTH_C + A(x, 0.0, zf)
+            d = A(0, 1 if up else -1, 0)
+            for _ in range(200):
+                if K.body.at(p[None])[0] <= 0:
+                    return p
+                p = p + d * 0.01
+            return p
+
         for s in (-1, 1):
-            for j, (yy, sgn, bn) in enumerate(((-0.74, 1, 'jaw'), (0.86, -1, 'head'))):
-                xo = s * 0.13
-                base = MOUTH_C + A(xo * MOUTH_R[0] / 0.5, yy * MOUTH_R[1], MOUTH_R[2] * (0.62 if sgn < 0 else 0.42)) + A(0, sgn * -0.02, 0)
-                tip = base + A(0, sgn * tl, -0.02)
-                K.horn(part, [base - A(0, sgn * 0.06, 0), base + (tip - base) * 0.5, tip], [0.07 + 0.012 * t, 0.06 + 0.01 * t, 0.01 if t < 2 else 0.0], mat='horn', sides=6, bone=bn, flat=0.7, up=A(0, 0, 1))
-        if t >= 1:   # extra fangs at the corners from t2
-            pass
-        if t >= 2:
+            for up, bn in ((False, 'jaw'), (True, 'head')):
+                # not too far forward (the lip is thin there); lower teeth sit beside the tongue so they show
+                g = gum_hit(s * (0.13 if up else 0.34) * MOUTH_R[0] / 0.5, MOUTH_R[2] * 0.12, up)
+                dv = A(0, -1 if up else 1, 0)           # grows from the gum into the cavity
+                r0 = 0.07 + 0.012 * t
+                K.horn(part, [g - dv * 0.06, g, g + dv * tl * 0.5 + A(0, 0, 0.01), g + dv * tl + A(0, 0, 0.02)],
+                       [r0 * 1.05, r0, 0.06 + 0.01 * t, 0.01 if t < 2 else 0.0], mat='horn', sides=6, bone=bn, flat=0.7, up=A(0, 0, 1))
+        if t >= 2:   # extra fangs at the upper corners
             for s in (-1, 1):
-                base = MOUTH_C + A(s * MOUTH_R[0] * 0.55, 0.82 * MOUTH_R[1] * 0.85, MOUTH_R[2] * 0.45)
-                K.horn(part, [base + A(0, 0.05, 0), base - A(0, 0.12 + 0.05 * t, 0)], [0.06, 0.0], mat='horn', sides=5, bone='head')
+                g = gum_hit(s * MOUTH_R[0] * 0.55, MOUTH_R[2] * 0.08, True)
+                K.horn(part, [g + A(0, 0.05, 0), g, g - A(0, 0.12 + 0.05 * t, 0)], [0.065, 0.06, 0.0], mat='horn', sides=5, bone='head')
         # fingernail claws on the grabbing hand, toe claws from t2
         if t >= 1:
             ln = 0.12 + 0.12 * t

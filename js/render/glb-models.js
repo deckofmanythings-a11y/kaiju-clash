@@ -47,13 +47,13 @@ export const GLB_FRAMES = {
   hydra: { koMode: 'side', quad: true },
   arachnid: { koMode: 'side' },
   stormray: { koMode: 'tilt', hover: 3.7, bank: 0.3 },
-  giantbaby: { arm: { reach: -1.1, elbowReach: 0.45 }, v: '2' },
+  giantbaby: { arm: { reach: -1.1, elbowReach: 0.45 }, v: '3' },   // v3 (1.12.3): teeth rooted in the gums
   colossalwoman: { v: '3' },   // v2 (1.12.1) / v3 (1.12.2): hands on the correct arms
   mechasaurian: {},
   wasp: { koMode: 'side', hover: 2.6, wing: { speed: 16, amp: 0.55 } },   // a hornet buzzes, a moth flaps
   scorpion: { koMode: 'side' },
   demon: { wing: { speed: 1.5, amp: 1.25 } },
-  werewolf: {},
+  werewolf: { v: '2' },   // v2 (1.12.3): teeth rooted in the jaws
   // `wing` scales the stock wing flap (speed in rad/s, amp multiplier); `spin` animates ring / shard bones (see buildRig)
   seraph: { koMode: 'tilt', hover: 2.0, wing: { speed: 1.7, amp: 0.7 }, spin: 'rings' },
   angel: { tiny: true, hover: 0.8, wing: { speed: 2.4, amp: 0.9 }, wild: 'angel', v: '2' },

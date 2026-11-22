@@ -3,6 +3,10 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.12.3', date: '2026-11-21',
+    fixed: ['Dire Lycan and Giant Baby: teeth now grow out of the gums and jaws instead of floating just off them.'],
+  },
+  {
     v: '1.12.2', date: '2026-11-21',
     fixed: [
       'Phones: the menu (Hangar, Lab, Arena, Ladder, Replays, Codex) was squeezed out of sight when the daily-limit badge showed. It now has its own row.',

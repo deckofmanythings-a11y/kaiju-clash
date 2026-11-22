@@ -281,6 +281,14 @@ def build(K):
     def hhorn(part, pts, radii, **kw):   # horn authored in head space
         K.horn(part, [H(q) for q in pts], [r * HSC for r in radii], **kw)
 
+    def htooth(part, pts, radii, **kw):
+        """Tooth authored in head space, its root snapped onto the real muzzle surface and sunk into it, so no tooth
+        floats in front of the lip (user report, 1.12.2)."""
+        P = [H(q) for q in pts]
+        s, n = K.snap(P[0])
+        root = s - n * max(radii[0] * HSC * 1.4, 0.05)
+        K.horn(part, [root, s + (P[1] - P[0]) * 0.35] + P[1:], [radii[0] * HSC * 1.1] + [r * HSC for r in radii], **kw)
+
     def heye(part, c, n, r, **kw):
         K.eye(part, H(c), n, r * HSC, **kw)
 
@@ -290,13 +298,13 @@ def build(K):
     K.ball('body', H((0, 9.1, 4.58)), (0.3, 0.21, 0.22), mat='dark', seg=10, rings=6, bone='head')
     for a in np.radians([-50, -28, -9, 9, 28, 50]):
         x, z = np.sin(a) * 0.3, 4.25 + np.cos(a) * 0.12
-        hhorn('body', [(x, 8.86, z), (x, 8.77, z + 0.01), (x, 8.7, z)], [0.04, 0.03, 0], sides=5, bone='head', shade=(0.8, 1))
-        hhorn('body', [(x * 0.85, 8.02, z - 0.25), (x * 0.85, 8.1, z - 0.24), (x * 0.85, 8.16, z - 0.26)], [0.035, 0.025, 0], sides=5, bone='jaw', shade=(0.8, 1))
+        htooth('body', [(x, 8.86, z), (x, 8.77, z + 0.01), (x, 8.7, z)], [0.04, 0.03, 0], sides=5, bone='head', shade=(0.8, 1))
+        htooth('body', [(x * 0.85, 8.02, z - 0.25), (x * 0.85, 8.1, z - 0.24), (x * 0.85, 8.16, z - 0.26)], [0.035, 0.025, 0], sides=5, bone='jaw', shade=(0.8, 1))
     for s in (-1, 1):
         for i in range(2):   # premolar row
             z = 3.4 + i * 0.22
-            hhorn('body', [(s * 0.33, 8.84, z), (s * 0.33, 8.72, z), (s * 0.32, 8.66, z)], [0.045, 0.03, 0], sides=4, bone='head', shade=(0.8, 1))
-            hhorn('body', [(s * 0.27, 8.24 - i * 0.04, z - 0.15), (s * 0.27, 8.34 - i * 0.04, z - 0.15), (s * 0.26, 8.4 - i * 0.04, z - 0.15)], [0.04, 0.03, 0], sides=4, bone='jaw', shade=(0.8, 1))
+            htooth('body', [(s * 0.33, 8.84, z), (s * 0.33, 8.72, z), (s * 0.32, 8.66, z)], [0.045, 0.03, 0], sides=4, bone='head', shade=(0.8, 1))
+            htooth('body', [(s * 0.27, 8.24 - i * 0.04, z - 0.15), (s * 0.27, 8.34 - i * 0.04, z - 0.15), (s * 0.26, 8.4 - i * 0.04, z - 0.15)], [0.04, 0.03, 0], sides=4, bone='jaw', shade=(0.8, 1))
 
     # ---- Might: hand + foot claws and fangs (exclusive, complete sets)
     for t, sc in enumerate(POW_SCALE):
@@ -315,10 +323,10 @@ def build(K):
             # fangs: upper canines (sabres at t3), lower canines
             ul = [0.36, 0.48, 0.62, 1.0][t]
             ub = np.array([s * 0.3, 8.86, 4.08])
-            hhorn(part, [ub, ub + [s * 0.02, -ul * 0.55, 0.02], ub + [s * 0.0, -ul, -0.04 - 0.08 * (t == 3)]], [0.075 + 0.012 * t, 0.055, 0], sides=6, per=3, bone='head', shade=(0.75, 1))
+            htooth(part, [ub, ub + [s * 0.02, -ul * 0.55, 0.02], ub + [s * 0.0, -ul, -0.04 - 0.08 * (t == 3)]], [0.075 + 0.012 * t, 0.055, 0], sides=6, per=3, bone='head', shade=(0.75, 1))
             ll = [0.28, 0.36, 0.46, 0.5][t]
             lb = np.array([s * 0.25, 8.12, 3.82])
-            hhorn(part, [lb, lb + [s * 0.03, ll * 0.6, 0.02], lb + [s * 0.04, ll, -0.04]], [0.065 + 0.008 * t, 0.045, 0], sides=6, per=3, bone='jaw', shade=(0.75, 1))
+            htooth(part, [lb, lb + [s * 0.03, ll * 0.6, 0.02], lb + [s * 0.04, ll, -0.04]], [0.065 + 0.008 * t, 0.045, 0], sides=6, per=3, bone='jaw', shade=(0.75, 1))
             if t >= 2:   # bony spurs on the knuckles of the wrist
                 p, n = K.snap(m * (WR + (0.35, 0.1, -0.2)))
                 K.horn(part, [p - n * 0.1, p + n * 0.3 + [0, 0.1, -0.2], p + n * 0.45 + [0, 0.35 * sc, -0.55]], [0.1, 0.07, 0], bone='forearm' + sd, per=3)
