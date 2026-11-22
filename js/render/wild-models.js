@@ -16,7 +16,7 @@
 
 import * as THREE from 'three';
 import { registerPlanBuilder, HP_SIZE } from './kaiju-model.js';
-import { ABILITY_BY_ID } from '../data/abilities.js';
+import { ABILITY_BY_ID } from '../data/abilities.js?v=5';
 import { registerWildRuntimes } from './glb-models.js';
 import { makeWildRuntimes } from './glb-wild.js';
 

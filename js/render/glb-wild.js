@@ -699,5 +699,19 @@ export function makeWildRuntimes(kit) {
     };
   }
 
-  return { hero, girl, team, army };
+  // ================================================================ ANGEL (human scale, sword + wings come from the GLB)
+  // Only the tiny-fighter readability kit: ground spotlight + ring, beacon glow, dart trail, a soft holy rim light.
+  function angel(I, glb) {
+    const { c } = I;
+    const acc = colorOf(c.colors.accent, '#ffd894');
+    rim(slotMats(I, ['body', 'belly', 'feather', 'gold', 'gilt']), acc, 0.08);
+    const tfx = tinyFx(c, glb.late, acc, { centerY: 0.55, beacon: 3.0 });
+    const spineTick = I.stockTick(I);
+    glb.tick = (r, dt, t) => {
+      spineTick?.(r, dt, t);
+      tfx(r, dt, t, r.anim.charge * 0.5);
+    };
+  }
+
+  return { hero, girl, team, army, angel };
 }

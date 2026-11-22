@@ -12,7 +12,7 @@
 // ({ t:'passive', tg, id, name }) get a visual per id; unknown ids fall back to a generic aura pulse.
 
 import * as THREE from 'three';
-import { ABILITY_BY_ID, STATUSES } from '../data/abilities.js';
+import { ABILITY_BY_ID, STATUSES } from '../data/abilities.js?v=5';
 import { softTexture } from './arena.js';
 
 const V3 = THREE.Vector3;

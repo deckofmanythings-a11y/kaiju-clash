@@ -168,6 +168,67 @@ const A = [
   { id: 'static_field',  name: 'Static Field',  frames: ['stormray'], kind: 'buff', cost: 25, cd: 4, fx: 'shield', price: 250,
     selfEffects: [{ status: 'shield', chance: 100, turns: 3, power: 12 }, { status: 'charged', chance: 100, turns: 3 }] },
 
+  // ---------- Exclusive: Giant Baby ----------
+  { id: 'tiny_fist',    name: 'Tiny Fist',     basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 100, acc: 93, fx: 'melee' },
+  { id: 'tantrum',      name: 'Tantrum',       frames: ['giantbaby'], kind: 'attack', type: 'physical', stat: 'pow', power: 50, hits: 4, acc: 85, cost: 30, cd: 2, fx: 'multi', price: 0 },
+  { id: 'wail',         name: 'Ear-Splitting Wail', frames: ['giantbaby'], kind: 'attack', type: 'sonic', stat: 'enr', power: 115, acc: 100, cost: 30, cd: 3, fx: 'roar', price: 300,
+    effects: [{ status: 'stun', chance: 25, turns: 1 }, { status: 'weaken', chance: 50, turns: 2 }] },
+  { id: 'nap_time',     name: 'Nap Time',      frames: ['giantbaby'], kind: 'heal', cost: 35, cd: 5, heal: 14, fx: 'heal', price: 300,
+    selfEffects: [{ status: 'regen', chance: 100, turns: 3, power: 4 }] },
+
+  // ---------- Exclusive: Colossal Woman ----------
+  { id: 'backhand',     name: 'Backhand',      basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 100, acc: 95, fx: 'melee' },
+  { id: 'car_toss',     name: 'Car Toss',      frames: ['colossalwoman'], kind: 'attack', type: 'physical', stat: 'pow', power: 185, acc: 88, cost: 40, cd: 3, fx: 'projectile', price: 0,
+    effects: [{ status: 'stun', chance: 20, turns: 1 }] },
+  { id: 'heel_stomp',   name: 'Heel Stomp',    frames: ['colossalwoman'], kind: 'attack', type: 'physical', stat: 'pow', power: 135, acc: 92, cost: 30, cd: 2, fx: 'melee', price: 300,
+    effects: [{ status: 'sunder', chance: 60, turns: 2 }] },
+  { id: 'scorned_fury', name: 'Scorned Fury',  frames: ['colossalwoman'], kind: 'buff', cost: 0, cd: 5, energyGain: 30, fx: 'roar', price: 350,
+    selfEffects: [{ status: 'enrage', chance: 100, turns: 3 }, { status: 'haste', chance: 100, turns: 2 }] },
+
+  // ---------- Exclusive: Mecha Saurian ----------
+  { id: 'drill_claw',      name: 'Drill Claw',      basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 100, acc: 95, fx: 'melee' },
+  { id: 'maser_breath',    name: 'Maser Breath',    frames: ['mechasaurian'], kind: 'attack', type: 'electric', stat: 'enr', power: 200, acc: 93, cost: 50, cd: 3, fx: 'beam', price: 0,
+    effects: [{ status: 'stun', chance: 15, turns: 1 }] },
+  { id: 'finger_missiles', name: 'Finger Missiles', frames: ['mechasaurian'], kind: 'attack', type: 'fire', stat: 'enr', power: 62, hits: 4, acc: 88, cost: 35, cd: 3, fx: 'projectile', price: 300 },
+  { id: 'reactor_shield',  name: 'Reactor Shield',  frames: ['mechasaurian'], kind: 'buff', cost: 30, cd: 5, fx: 'shield', price: 300,
+    selfEffects: [{ status: 'shield', chance: 100, turns: 3, power: 14 }, { status: 'charged', chance: 100, turns: 2 }] },
+
+  // ---------- Exclusive: Vespa Rex ----------
+  { id: 'mandible',        name: 'Mandible Snap',   basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 95, acc: 96, fx: 'melee' },
+  { id: 'stinger_lance',   name: 'Stinger Lance',   frames: ['wasp'], kind: 'attack', type: 'acid', stat: 'pow', power: 150, acc: 90, cost: 35, cd: 3, critBonus: 10, fx: 'melee', price: 0,
+    effects: [{ status: 'poison', chance: 100, turns: 3, power: 50 }] },
+  { id: 'hive_swarm',      name: 'Hive Swarm',      frames: ['wasp'], kind: 'attack', type: 'acid', stat: 'enr', power: 32, hits: 6, acc: 85, cost: 40, cd: 3, fx: 'multi', price: 300 },
+  { id: 'alarm_pheromone', name: 'Alarm Pheromone', frames: ['wasp'], kind: 'buff', cost: 20, cd: 4, fx: 'buff', price: 300,
+    selfEffects: [{ status: 'enrage', chance: 100, turns: 2 }, { status: 'haste', chance: 100, turns: 2 }] },
+
+  // ---------- Exclusive: Sandreaper ----------
+  { id: 'pincer',      name: 'Pincer Snip',  basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 100, acc: 94, fx: 'melee' },
+  { id: 'tail_strike', name: 'Tail Strike',  frames: ['scorpion'], kind: 'attack', type: 'acid', stat: 'pow', power: 140, acc: 90, cost: 40, cd: 3, fx: 'melee', price: 0,
+    effects: [{ status: 'poison', chance: 80, turns: 3, power: 50 }, { status: 'stun', chance: 15, turns: 1 }] },
+  { id: 'pincer_lock', name: 'Pincer Lock',  frames: ['scorpion'], kind: 'attack', type: 'physical', stat: 'pow', power: 100, acc: 90, cost: 30, cd: 3, fx: 'grab', price: 300,
+    effects: [{ status: 'bind', chance: 80, turns: 2 }, { status: 'bleed', chance: 40, turns: 2, power: 40 }] },
+  { id: 'burrow',      name: 'Burrow',       frames: ['scorpion'], kind: 'buff', cost: 25, cd: 4, fx: 'shield', price: 250,
+    selfEffects: [{ status: 'evasive', chance: 100, turns: 2 }, { status: 'fortify', chance: 100, turns: 2 }] },
+
+  // ---------- Exclusive: Archfiend ----------
+  { id: 'infernal_rend', name: 'Infernal Rend', basic: true, kind: 'attack', type: 'fire', stat: 'pow', power: 95, acc: 95, fx: 'melee',
+    effects: [{ status: 'burn', chance: 15, turns: 2, power: 30 }] },
+  { id: 'hellfire',      name: 'Hellfire',      frames: ['demon'], kind: 'attack', type: 'fire', stat: 'enr', power: 135, acc: 92, cost: 40, cd: 3, fx: 'aoe', price: 0,
+    effects: [{ status: 'burn', chance: 70, turns: 3, power: 45 }] },
+  { id: 'soul_drain',    name: 'Soul Drain',    frames: ['demon'], kind: 'attack', type: 'sonic', stat: 'enr', power: 140, acc: 94, cost: 40, cd: 3, drain: 50, fx: 'beam', price: 350 },
+  { id: 'blood_pact',    name: 'Blood Pact',    frames: ['demon'], kind: 'buff', cost: 0, cd: 6, energyGain: 40, selfDamage: 8, fx: 'buff', price: 300,
+    selfEffects: [{ status: 'enrage', chance: 100, turns: 3 }, { status: 'charged', chance: 100, turns: 3 }] },
+
+  // ---------- Exclusive: Dire Lycan ----------
+  { id: 'maul',       name: 'Maul',       basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 100, acc: 94, fx: 'melee',
+    effects: [{ status: 'bleed', chance: 20, turns: 2, power: 30 }] },
+  { id: 'frenzy',     name: 'Frenzy',     frames: ['werewolf'], kind: 'attack', type: 'physical', stat: 'pow', power: 50, hits: 4, acc: 88, cost: 30, cd: 2, fx: 'multi', price: 0,
+    effects: [{ status: 'bleed', chance: 30, turns: 2, power: 30 }] },
+  { id: 'moon_howl',  name: 'Moon Howl',  frames: ['werewolf'], kind: 'buff', cost: 25, cd: 5, fx: 'roar', price: 300,
+    selfEffects: [{ status: 'enrage', chance: 100, turns: 3 }, { status: 'regen', chance: 100, turns: 3, power: 4 }] },
+  { id: 'throat_rip', name: 'Throat Rip', frames: ['werewolf'], kind: 'attack', type: 'physical', stat: 'pow', power: 150, acc: 88, cost: 40, cd: 4, critBonus: 15, execute: 25, fx: 'melee', price: 400,
+    effects: [{ status: 'bleed', chance: 60, turns: 3, power: 40 }] },
+
   // ---------- Rare Wild-only enemies ----------
   { id: 'hero_punch',     name: 'Hero Punch',       basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 105, acc: 96, fx: 'melee' },
   { id: 'heat_vision',    name: 'Heat Vision',      frames: ['superhero'], kind: 'attack', type: 'fire', stat: 'enr', power: 190, acc: 96, cost: 45, cd: 3, fx: 'beam', price: 300,
@@ -197,6 +258,35 @@ const A = [
     effects: [{ status: 'bind', chance: 85, turns: 2 }, { status: 'weaken', chance: 60, turns: 2 }] },
   { id: 'heart_barrier',  name: 'Heart Barrier',    frames: ['magicalgirl'], kind: 'buff', cost: 25, cd: 4, fx: 'shield', price: 300,
     selfEffects: [{ status: 'shield', chance: 100, turns: 3, power: 12 }, { status: 'regen', chance: 100, turns: 3, power: 4 }] },
+
+  { id: 'gaze',          name: 'Unblinking Gaze', basic: true, kind: 'attack', type: 'fire', stat: 'enr', power: 95, acc: 100, fx: 'beam' },
+  { id: 'wheel_of_fire', name: 'Wheel of Fire',   frames: ['seraph'], kind: 'attack', type: 'fire', stat: 'enr', power: 55, hits: 4, acc: 95, cost: 40, cd: 3, fx: 'multi', price: 300,
+    effects: [{ status: 'burn', chance: 40, turns: 2, power: 40 }] },
+  { id: 'be_not_afraid', name: 'Be Not Afraid',   frames: ['seraph'], kind: 'debuff', cost: 25, cd: 4, acc: 100, fx: 'roar', price: 300,
+    effects: [{ status: 'weaken', chance: 100, turns: 2 }, { status: 'blind', chance: 100, turns: 2 }] },
+  { id: 'judgment',      name: 'Judgment',        frames: ['seraph'], kind: 'attack', type: 'fire', stat: 'enr', power: 230, acc: 95, cost: 60, cd: 4, fx: 'beam', price: 300,
+    effects: [{ status: 'sunder', chance: 50, turns: 2 }] },
+
+  { id: 'radiant_blade', name: 'Radiant Blade',   basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 105, acc: 96, fx: 'melee' },
+  { id: 'flaming_sword', name: 'Flaming Sword',   frames: ['angel'], kind: 'attack', type: 'fire', stat: 'pow', power: 190, acc: 92, cost: 45, cd: 3, fx: 'melee', price: 300,
+    effects: [{ status: 'burn', chance: 50, turns: 2, power: 40 }] },
+  { id: 'wing_shield',   name: 'Wing Shield',     frames: ['angel'], kind: 'buff', cost: 25, cd: 4, fx: 'shield', price: 300,
+    selfEffects: [{ status: 'shield', chance: 100, turns: 3, power: 12 }, { status: 'evasive', chance: 100, turns: 2 }] },
+  { id: 'smite',         name: 'Smite',           frames: ['angel'], kind: 'attack', type: 'electric', stat: 'enr', power: 200, acc: 92, cost: 50, cd: 3, fx: 'beam', price: 300,
+    effects: [{ status: 'stun', chance: 20, turns: 1 }] },
+
+  { id: 'tendril_lash',      name: 'Tendril Lash',      basic: true, kind: 'attack', type: 'physical', stat: 'pow', power: 105, acc: 96, fx: 'melee' },
+  { id: 'eldritch_whispers', name: 'Eldritch Whispers', frames: ['elderspawn'], kind: 'attack', type: 'sonic', stat: 'enr', power: 120, acc: 100, cost: 30, cd: 3, fx: 'roar', price: 300,
+    effects: [{ status: 'weaken', chance: 70, turns: 2 }, { status: 'blind', chance: 40, turns: 2 }] },
+  { id: 'tentacle_maw',      name: 'Tentacle Maw',      frames: ['elderspawn'], kind: 'attack', type: 'physical', stat: 'pow', power: 120, acc: 90, cost: 35, cd: 3, fx: 'grab', price: 300,
+    effects: [{ status: 'bind', chance: 80, turns: 2 }, { status: 'bleed', chance: 50, turns: 2, power: 40 }] },
+  { id: 'abyssal_rebirth',   name: 'Abyssal Rebirth',   frames: ['elderspawn'], kind: 'heal', cost: 40, cd: 5, heal: 15, cleanse: true, fx: 'heal', price: 300 },
+
+  { id: 'shard_lance',  name: 'Shard Lance',  basic: true, kind: 'attack', type: 'electric', stat: 'enr', power: 95, acc: 97, fx: 'projectile' },
+  { id: 'prism_beam',   name: 'Prism Beam',   frames: ['polyhedron'], kind: 'attack', type: 'electric', stat: 'enr', power: 235, acc: 92, cost: 65, cd: 4, fx: 'beam', price: 300 },
+  { id: 'shard_storm',  name: 'Shard Storm',  frames: ['polyhedron'], kind: 'attack', type: 'physical', stat: 'enr', power: 35, hits: 6, acc: 88, cost: 40, cd: 3, fx: 'multi', price: 300 },
+  { id: 'reconfigure',  name: 'Reconfigure',  frames: ['polyhedron'], kind: 'buff', cost: 30, cd: 5, fx: 'shield', price: 300,
+    selfEffects: [{ status: 'fortify', chance: 100, turns: 3 }, { status: 'shield', chance: 100, turns: 3, power: 15 }] },
 ];
 
 export const ABILITIES = A;

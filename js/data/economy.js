@@ -44,6 +44,10 @@ const RARE_NAMES = {
   heroteam: ['The Vanguard Five', 'Aegis Squadron', 'The Dawn Legion', 'Team Bulwark', 'The Sentinel Corps'],
   army: ['7th Armored Division', 'Task Force Hammer', 'Iron Rain Battalion', 'Operation Last Line', 'Joint Strike Group Kilo'],
   magicalgirl: ['Magical Girl Stellar Lumi', 'Starlight Mirai', 'Pretty Guardian Hoshi', 'Miracle Ribbon Aiko', 'Comet Princess Yuna'],
+  seraph: ['The Watcher of the Wheels', 'Ophan of the Sixth Sky', 'The Thousand-Eyed', 'Throne of Burning Gold', 'The Unsleeping Choir'],
+  angel: ['Seraphina', 'Aurelia of the Dawn', 'The Silver Wing', 'Celestine', 'Lumina, Blade of Heaven'],
+  elderspawn: ['The Drowned Heir', 'Spawn of the Sunken Star', 'It Who Dreams Below', 'The Brine-Born Whelp', 'Child of the Black Tide'],
+  polyhedron: ['The Litharch', 'Prism Sentinel IV', 'The Ninth Angle', 'Facet of the Last Hour', 'The Silent Lattice'],
 };
 // Weighted pick of a rare frame id (weights = frame.rarity).
 export function pickRare(rng) {

@@ -3,6 +3,15 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.12.0', date: '2026-11-21',
+    added: [
+      'Seven new Kaiju frames: Giant Baby, Colossal Woman, Mecha Saurian, Vespa Rex (hornet), Sandreaper (scorpion), Archfiend (demon) and Dire Lycan (werewolf). Each has its own basic attack, three exclusive abilities and a full 3D model with upgrade tiers.',
+      'Soul Drain (Archfiend) is the first ability that heals you for part of the damage it deals.',
+      'New things are stirring in the Wild...',
+    ],
+    changed: ['Battle engine v5. Old replays still play back exactly as they happened.'],
+  },
+  {
     v: '1.11.1', date: '2026-11-21',
     fixed: ['Fine Tune: trading one stat down for another is now free. Only undoing or shrinking earlier tuning costs the 50 BIO re-tune fee.'],
   },

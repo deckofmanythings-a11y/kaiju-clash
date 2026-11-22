@@ -1,12 +1,12 @@
 // Codex: every rule, formula and number the battle engine uses, in players' terms.
 // Mirrors js/engine/battle.js, js/engine/aftermath.js and js/data/*. If you change a formula there, change it here.
 // Rare Wild encounters are easter eggs: their frames, abilities and passives are NEVER listed here.
-import { FRAMES, STATS, STAT_NAMES, MAX_STAT_LEVEL } from '../data/frames.js';
-import { ABILITIES, STATUSES, DMG_TYPES, MAX_EQUIPPED, abilityAvailableTo, abilityScope } from '../data/abilities.js';
+import { FRAMES, STATS, STAT_NAMES, MAX_STAT_LEVEL } from '../data/frames.js?v=5';
+import { ABILITIES, STATUSES, DMG_TYPES, MAX_EQUIPPED, abilityAvailableTo, abilityScope } from '../data/abilities.js?v=5';
 import { ENVIRONMENTS } from '../data/environments.js';
 import { INJURIES, CONDITIONS, CRITICAL_AT, MAX_INJURIES, HEAL_COST, MAX_HEAL_MIN } from '../data/injuries.js';
 import { INJURY_ODDS } from '../engine/aftermath.js';
-import { REWARD, STARTING_BIO, statUpgradeCost } from '../data/economy.js';
+import { REWARD, STARTING_BIO, statUpgradeCost } from '../data/economy.js?v=5';
 import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS } from '../data/finetune.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -72,6 +72,7 @@ function abilityRow(a) {
   if (a.selfDamage) k.push(`costs <b>${a.selfDamage}%</b> of your max HP`);
   if (a.execute) k.push(`<b>×2</b> damage if target is below ${a.execute}% HP`);
   if (a.critBonus) k.push(`+<b>${a.critBonus}</b> crit chance`);
+  if (a.drain) k.push(`heals you for <b>${a.drain}%</b> of the damage dealt`);
   return k.join(' · ');
 }
 

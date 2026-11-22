@@ -7,6 +7,7 @@ Options (after the `--`):
   --no-render        build + export GLBs only
   --no-sheet         skip contact_sheet.png
   --sheet-only       only (re)build the contact sheet from existing renders
+  --sheet-new        (re)build out/previews/new_frames_sheet.png for the preview-only NEW frames
   --angles 35,160    extra debug views (azimuth degrees) written to out/debug/ at --res
   --res 1024         render resolution
   --tiers 0,3        which tiers to render
@@ -36,6 +37,17 @@ OUT = os.path.join(HERE, 'out')
 FRAMES_JS = os.path.normpath(os.path.join(HERE, '..', '..', 'js', 'data', 'frames.js'))
 ORDER = ['saurian', 'ape', 'kraken', 'lepidra', 'carapace', 'mantid', 'serpent', 'mecha', 'golem', 'hydra', 'arachnid',
          'stormray', 'superhero', 'heroteam', 'army', 'magicalgirl']
+# Preview-only frames that are not in js/data/frames.js yet: their module carries INFO = dict(name=, colors=)
+# and their renders go to out/previews/ (sheet: --sheet-new -> out/previews/new_frames_sheet.png).
+NEW = ['giantbaby', 'colossalwoman', 'mechasaurian', 'wasp', 'scorpion', 'demon', 'werewolf',
+       'seraph', 'angel', 'polyhedron', 'elderspawn']
+
+
+def new_info(fid):
+    try:
+        return dict(importlib.import_module(f'kaiju.frames.{fid}').INFO)
+    except Exception:
+        return dict(name=fid, colors=dict(body='#4a4a52', belly='#9a9a8a', accent='#5fd6ff'))
 
 
 def frame_table():
@@ -119,7 +131,7 @@ def build_frame(fid, info, args):
         K.set_tier(3)
         P3 = R.world_verts(K.objects)
         R.make_stage(scene, P3)
-        rd = os.path.join(OUT, 'renders')
+        rd = os.path.join(OUT, 'previews' if fid in NEW else 'renders')
         for t in args['tiers']:
             K.set_tier(t)
             # same view direction for both tiers; each is framed to fit (t3 is HP_SIZE[3]=1.36x bigger in game)
@@ -139,9 +151,15 @@ def build_frame(fid, info, args):
                 pb.rotation_euler = (0, 0, 0)
             bpy.context.view_layer.update()
         for az in args['angles']:
+            import math
             K.set_tier(3)
             R.fit_camera(scene, P3, az, cam.get('el', 9))
+            cyc = scene.collection.objects.get('cyc')
+            if cyc:   # back views: the camera sits behind the backdrop wall, so drop it (plain world background)
+                cyc.hide_render = math.cos(math.radians(az)) < -0.5
             R.render(scene, os.path.join(OUT, 'debug', f'{fid}_a{int(az)}.png'))
+            if cyc:
+                cyc.hide_render = False
         if getattr(mod, 'SCALE_REF', False):
             ref = os.path.join(OUT, 'glb', 'saurian.glb')
             if os.path.exists(ref) and fid != 'saurian':
@@ -166,7 +184,7 @@ def main():
     def opt(name, default=None):
         return argv[argv.index(name) + 1] if name in argv else default
     table = frame_table()
-    frames = [f for f in (opt('--frames', ','.join(ORDER)).split(',')) if f]
+    frames = [f for f in (opt('--frames', '' if '--sheet-new' in argv else ','.join(ORDER)).split(',')) if f]
     args = dict(pose='--pose' in argv, no_render='--no-render' in argv, res=int(opt('--res', 1024)),
                 angles=[float(a) for a in opt('--angles', '').split(',') if a],
                 tiers=[int(t) for t in opt('--tiers', '0,3').split(',')])
@@ -182,12 +200,15 @@ def main():
                 print(f'[{fid}] no frame module yet, skipped')
                 continue
             try:
-                stats[fid] = build_frame(fid, table[fid], args)
+                stats[fid] = build_frame(fid, table.get(fid) or new_info(fid), args)
             except Exception:
                 traceback.print_exc()
                 failed.append(fid)
-    if '--no-sheet' not in argv and not args['no_render'] and (len(frames) == len(ORDER) or '--sheet-only' in argv):
+    if '--no-sheet' not in argv and '--sheet-new' not in argv and not args['no_render'] and (len(frames) == len(ORDER) or '--sheet-only' in argv):
         R.contact_sheet(os.path.join(OUT, 'renders'), [(f, table[f]['name']) for f in ORDER], os.path.join(OUT, 'renders', 'contact_sheet.png'))
+    if '--sheet-new' in argv:
+        R.contact_sheet(os.path.join(OUT, 'previews'), [(f, new_info(f)['name']) for f in NEW],
+                        os.path.join(OUT, 'previews', 'new_frames_sheet.png'), cols=6)
     sd = os.path.join(OUT, 'stats')
     if os.path.isdir(sd):
         allst = {f[:-5]: json.load(open(os.path.join(sd, f))) for f in sorted(os.listdir(sd)) if f.endswith('.json')}

@@ -7,9 +7,10 @@ import { ENV_BY_ID } from '../data/environments.js';
 import { INJURY_BY_ID, MAX_INJURIES, applyInjuries } from '../data/injuries.js';
 import { sanitizeTune, modAbility } from '../data/finetune.js';
 
-export const ENGINE_VERSION = 4; // v2: persistent injuries lower stats. v3: frame passives (rare Wild enemies). v4: Fine Tune
-// Older versions whose records replay identically on this engine (v4 only adds optional Fine Tune data).
-export const COMPAT_VERSIONS = [3, 4];
+export const ENGINE_VERSION = 5; // v2: persistent injuries lower stats. v3: frame passives (rare Wild enemies). v4: Fine Tune. v5: 11 new frames, 4 new passives, drain
+// Older versions whose records replay identically on this engine (v4 only adds optional Fine Tune data; v5 only adds
+// new frames / passives / the `drain` ability field, none of which existed in older records).
+export const COMPAT_VERSIONS = [3, 4, 5];
 export const engineCompatible = (v) => COMPAT_VERSIONS.includes(v);
 const MAX_ACTIONS = 80;          // 40 rounds
 const GAUGE = 1000;              // initiative threshold
@@ -95,6 +96,10 @@ export function simulateBattle({ seed, env: envId, a, b }) {
       emit({ t: 'passive', tg: tg.i, id: 'swarm', name: PASSIVES.swarm.name, resisted: eff.status });
       return;
     }
+    if (tg.passive === 'many_eyes' && eff.status === 'blind') {
+      emit({ t: 'passive', tg: tg.i, id: 'many_eyes', name: PASSIVES.many_eyes.name, resisted: eff.status });
+      return;
+    }
     const existing = has(tg, eff.status);
     const rec = existing || { id: eff.status, turns: 0, val: 0 };
     rec.turns = Math.max(rec.turns, eff.turns || 1);
@@ -137,15 +142,16 @@ export function simulateBattle({ seed, env: envId, a, b }) {
       return;
     }
     if (tg.pUsed || tg.hp * 2 >= tg.maxHp) return;
-    if (tg.passive !== 'tag_team' && tg.passive !== 'transformation') return;
+    if (tg.passive !== 'tag_team' && tg.passive !== 'transformation' && tg.passive !== 'divine_grace') return;
     tg.pUsed = true;
     emit({ t: 'passive', tg: tg.i, id: tg.passive, name: PASSIVES[tg.passive].name });
     for (const x of tg.statuses.filter(x => NEGATIVE.has(x.id))) emit({ t: 'expire', tg: tg.i, st: x.id });
     tg.statuses = tg.statuses.filter(x => !NEGATIVE.has(x.id));
-    if (tg.passive === 'tag_team') {
-      const amt = Math.min(tg.maxHp - tg.hp, pct(tg.maxHp, 30));
+    if (tg.passive === 'tag_team' || tg.passive === 'divine_grace') {
+      const amt = Math.min(tg.maxHp - tg.hp, pct(tg.maxHp, tg.passive === 'tag_team' ? 30 : 25));
       tg.hp += amt;
       emit({ t: 'heal', tg: tg.i, amt, hp: tg.hp });
+      if (tg.passive === 'divine_grace') applyStatus(tg, tg, { status: 'enrage', chance: 100, turns: 3 });
     } else {
       tg.energy = 100;
       applyStatus(tg, tg, { status: 'shield', chance: 100, turns: 3, power: 10 });
@@ -218,10 +224,10 @@ export function simulateBattle({ seed, env: envId, a, b }) {
     }
     for (const e of ab.selfEffects || []) applyStatus(f, f, e);
 
-    const accFor = () => clamp(
+    const accFor = () => (f.passive === 'many_eyes' ? 100 : clamp(
       (ab.acc ?? 100) + Math.floor((stat(f, 'fcs') - stat(tg, 'spd')) / 2) + (env.accMod || 0)
-        - (has(f, 'blind') ? 30 : 0) - (has(tg, 'evasive') ? 25 : 0),
-      15, 100);
+        - (has(f, 'blind') ? 30 : 0) - (has(tg, 'evasive') ? 25 : 0) - (tg.passive === 'maddening' ? 10 : 0),
+      15, 100));
 
     if (ab.kind === 'debuff') {
       if (rng.roll(accFor())) for (const e of ab.effects || []) applyStatus(f, tg, e);
@@ -233,7 +239,11 @@ export function simulateBattle({ seed, env: envId, a, b }) {
     const hits = ab.hits || 1;
     let landed = 0;
     for (let h = 1; h <= hits; h++) {
-      if (!rng.roll(accFor())) { emit({ t: 'miss', a: f.i, tg: tg.i, hitNo: h, hits }); continue; }
+      if (!rng.roll(accFor())) {
+        emit({ t: 'miss', a: f.i, tg: tg.i, hitNo: h, hits });
+        if (tg.passive === 'maddening' && !tg.pShown) { tg.pShown = true; emit({ t: 'passive', tg: tg.i, id: 'maddening', name: PASSIVES.maddening.name }); }
+        continue;
+      }
       landed++;
       const type = ab.type === 'random' ? rng.pick(ab.randomTypes) : ab.type;
       let raw = Math.floor((ab.power * stat(f, ab.stat || 'pow')) / 20);
@@ -246,8 +256,15 @@ export function simulateBattle({ seed, env: envId, a, b }) {
       if (env.fxMult?.[ab.fx]) raw = pct(raw, env.fxMult[ab.fx]);
       if (has(tg, 'bind')) raw = pct(raw, 120);
       if (ab.execute && tg.hp * 100 < tg.maxHp * ab.execute) raw *= 2;
+      let capped = false;
+      if (tg.passive === 'absolute_field' && raw > pct(tg.maxHp, 15)) { raw = pct(tg.maxHp, 15); capped = !tg.pShown; tg.pShown = true; }
       const { dealt, absorbed } = damage(tg, Math.max(1, raw));
       emit({ t: 'hit', a: f.i, tg: tg.i, dmg: dealt, crit, type, hp: tg.hp, absorbed, hitNo: h, hits });
+      if (capped) emit({ t: 'passive', tg: tg.i, id: 'absolute_field', name: PASSIVES.absolute_field.name });
+      if (ab.drain && dealt > 0 && f.hp < f.maxHp) {
+        const amt = Math.min(f.maxHp - f.hp, pct(dealt, ab.drain));
+        if (amt > 0) { f.hp += amt; emit({ t: 'heal', tg: f.i, amt, hp: f.hp }); }
+      }
       afterDamage(tg);
       if (tg.hp <= 0) return;
     }

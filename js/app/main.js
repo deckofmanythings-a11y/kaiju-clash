@@ -1,8 +1,8 @@
-import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES, STAT_BLURBS, MAX_STAT_LEVEL, effectiveStats, PASSIVES, WILD_FRAMES } from '../data/frames.js';
-import { ABILITY_BY_ID, STATUSES, MAX_EQUIPPED, abilitiesForFrame, abilityScope } from '../data/abilities.js';
+import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES, STAT_BLURBS, MAX_STAT_LEVEL, effectiveStats, PASSIVES, WILD_FRAMES } from '../data/frames.js?v=5';   // ?v=5: 1.12.0 added 11 frames; a cached copy would crash on them
+import { ABILITY_BY_ID, STATUSES, MAX_EQUIPPED, abilitiesForFrame, abilityScope } from '../data/abilities.js?v=5';
 import { ENV_BY_ID, ENVIRONMENTS } from '../data/environments.js';
-import { statUpgradeCost, powerRating, battleReward, RARE_REWARD_MULT } from '../data/economy.js';
-import { simulateBattle, verifyReplay, ENGINE_VERSION, engineCompatible } from '../engine/battle.js?v=4';   // versioned: a cached v3 battle.js lacks engineCompatible
+import { statUpgradeCost, powerRating, battleReward, RARE_REWARD_MULT } from '../data/economy.js?v=5';
+import { simulateBattle, verifyReplay, ENGINE_VERSION, engineCompatible } from '../engine/battle.js?v=5';   // versioned: cached copies predate the v5 frames (bump with ENGINE_VERSION)
 import { randomSeed, createRng } from '../engine/rng.js';
 import { INJURY_BY_ID, conditionOf, deathChance, healCost, applyInjuries } from '../data/injuries.js';
 import * as codes from './codes.js';
@@ -13,7 +13,7 @@ import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCos
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html,
 // and add a player-facing entry to js/app/changelog.js.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.11.1';
+const APP_VERSION = '1.12.0';
 
 // Version line doubles as the changelog button; a dot marks updates you haven't opened yet.
 const SEEN_KEY = 'kb-seen-version';
@@ -148,6 +148,7 @@ function describe(ab) {
   if (ab.energyGain) bits.push(`+${ab.energyGain} energy`);
   if (ab.selfDamage) bits.push(`costs ${ab.selfDamage}% HP`);
   if (ab.execute) bits.push(`double damage below ${ab.execute}% HP`);
+  if (ab.drain) bits.push(`heals ${ab.drain}% of damage dealt`);
   if (ab.critBonus) bits.push(`+${ab.critBonus}% crit`);
   return bits.join(' · ');
 }

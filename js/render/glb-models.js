@@ -21,7 +21,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { FRAME_BY_ID } from '../data/frames.js';
+import { FRAME_BY_ID } from '../data/frames.js?v=5';
 
 const V3 = THREE.Vector3, Q4 = THREE.Quaternion;
 const PI = Math.PI;
@@ -47,6 +47,18 @@ export const GLB_FRAMES = {
   hydra: { koMode: 'side', quad: true },
   arachnid: { koMode: 'side' },
   stormray: { koMode: 'tilt', hover: 3.7, bank: 0.3 },
+  giantbaby: { arm: { reach: -1.1, elbowReach: 0.45 } },
+  colossalwoman: {},
+  mechasaurian: {},
+  wasp: { koMode: 'side', hover: 2.6, wing: { speed: 16, amp: 0.55 } },   // a hornet buzzes, a moth flaps
+  scorpion: { koMode: 'side' },
+  demon: { wing: { speed: 1.5, amp: 1.25 } },
+  werewolf: {},
+  // `wing` scales the stock wing flap (speed in rad/s, amp multiplier); `spin` animates ring / shard bones (see buildRig)
+  seraph: { koMode: 'tilt', hover: 2.0, wing: { speed: 1.7, amp: 0.7 }, spin: 'rings' },
+  angel: { tiny: true, hover: 0.8, wing: { speed: 2.4, amp: 0.9 }, wild: 'angel' },
+  elderspawn: { wing: { speed: 1.3, amp: 0.8 } },
+  polyhedron: { koMode: 'tilt', hover: 1.0, spin: 'shards' },
   // Rare Wild frames: `wild` names their runtime in glb-wild.js (cape sim, beam eyes, tag-team swap, air strikes,
   // reinforcements, transformation ...), registered by wild-models.js.
   superhero: { tiny: true, hover: 0.9, wild: 'hero' },
@@ -514,11 +526,20 @@ function buildRig(I) {
   ['m', 'h'].forEach((pre, k) => { for (const sd of ['L', 'R']) radial(`${pre}femur${sd}`, `${pre}tibia${sd}`, `${pre}tarsus${sd}`, k * 2.1 + (sd === 'R' ? 0 : PI / 2)); });
   // lepidra: dangling legs + four wings
   for (let k = 0; k <= 2; k++) for (const sd of ['L', 'R']) if (has(`leg${k}${sd}1`) && !has(`leg${k}${sd}4`)) limb({ type: 'leg', pivot: proxy(bones.get(`leg${k}${sd}1`)), phase: k + (sd === 'R' ? 1 : -1) });
-  for (const [n, amp, ph] of [['wingF', 0.42, 0], ['wingH', 0.36, -0.4]]) for (const sd of ['L', 'R']) {
-    const b = bones.get(n + sd); if (b) limb({ type: 'wing', pivot: proxy(b), side: sideOf(b), amp, speed: 5.5, phase: ph });
+  const ws = cfg.wing || {}, wAmp = ws.amp ?? 1;
+  // (wingL* = the seraph's lowest pair: wingLL / wingLR)
+  for (const [n, amp, ph] of [['wingF', 0.42, 0], ['wingH', 0.36, -0.4], ['wingL', 0.3, -0.8]]) for (const sd of ['L', 'R']) {
+    const b = bones.get(n + sd); if (b) limb({ type: 'wing', pivot: proxy(b), side: sideOf(b), amp: amp * wAmp, speed: ws.speed ?? 5.5, phase: ph });
   }
-  // stormray: three-bone wings flap as a travelling wave
-  for (const sd of ['L', 'R']) seq('wing' + sd).forEach((n, i) => { const b = bones.get(n); limb({ type: 'wing', pivot: proxy(b), side: sideOf(b), amp: [0.2, 0.2, 0.16][i] ?? 0.15, speed: 2.1, phase: -0.7 * i }); });
+  // stormray / demon / angel: three-bone wings flap as a travelling wave
+  for (const sd of ['L', 'R']) seq('wing' + sd).forEach((n, i) => { const b = bones.get(n); limb({ type: 'wing', pivot: proxy(b), side: sideOf(b), amp: ([0.2, 0.2, 0.16][i] ?? 0.15) * wAmp, speed: ws.speed ?? 2.1, phase: -0.7 * i }); });
+  // spinners: seraph rings turn about their own axes; litharch shards orbit the core and tumble
+  I.spinners = [];
+  if (cfg.spin === 'rings') seq('ring').forEach((n, i) => { const p = chain([n])?.[0]; if (p) I.spinners.push({ kind: 'ring', p, speed: (i % 2 ? -1 : 1) * (0.35 + 0.17 * i) }); });
+  if (cfg.spin === 'shards') seq('shard').forEach((n, i) => {
+    const b = bones.get(n); const p = proxy(b, new Q4()); const rest = wpos(b);
+    I.spinners.push({ kind: 'shard', p, rest, r: Math.hypot(rest.x, rest.z), a0: Math.atan2(rest.z, rest.x), speed: 0.28 + 0.05 * (i % 3), ph: i * 1.3 });
+  });
 
   // chains
   const tail = chain(seq('tail'));
@@ -542,9 +563,19 @@ function nodeNameOf(o) { return nodeName(o); }
 
 // Extra bone motion on top of the stock rig.update (which only knows heads / jaws / limbs).
 function stockTick(I) {
-  const spine = I.spine || [], whips = I.c.rig.limbs.filter(L => L.whip);
-  if (!spine.length && !whips.length) return null;
+  const spine = I.spine || [], whips = I.c.rig.limbs.filter(L => L.whip), spinners = I.spinners || [];
+  if (!spine.length && !whips.length && !spinners.length) return null;
   return (rig, dt, t) => {
+    for (const sp of spinners) {
+      const k = 1 + rig.anim.charge * 2.5 + rig.anim.roar * 1.5;   // spin up when charging a beam / roaring
+      sp.acc = (sp.acc || 0) + dt * k * (1 - rig.anim.ko * 0.9);
+      if (sp.kind === 'ring') sp.p.rotation.y = sp.acc * sp.speed;
+      else {
+        const a = sp.a0 + sp.acc * sp.speed, tt = t + sp.ph;
+        sp.p.position.set(Math.cos(a) * sp.r - sp.rest.x, Math.sin(tt * 1.3) * 0.35 - rig.anim.ko * 1.2, Math.sin(a) * sp.r - sp.rest.z);
+        sp.p.rotation.set(Math.sin(tt * 0.7) * 0.3, -(a - sp.a0) + tt * 0.6, Math.cos(tt * 0.9) * 0.25);
+      }
+    }
     const a = rig.anim, tt = t + (rig.seed || 0), up = 1 - a.ko;
     const roar = Math.max(a.roar, a.victory * (0.5 + 0.5 * Math.sin(tt * 2.2)));
     const n = spine.length || 1;

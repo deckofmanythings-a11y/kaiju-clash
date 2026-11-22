@@ -25,8 +25,8 @@
 
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { FRAME_BY_ID, visualTiers } from '../data/frames.js';
-import { ABILITY_BY_ID } from '../data/abilities.js';
+import { FRAME_BY_ID, visualTiers } from '../data/frames.js?v=5';
+import { ABILITY_BY_ID } from '../data/abilities.js?v=5';
 import * as INJ from '../data/injuries.js';
 import { glbReady, glbMissing, preloadFrames, buildGlbPlan } from './glb-models.js';
 
