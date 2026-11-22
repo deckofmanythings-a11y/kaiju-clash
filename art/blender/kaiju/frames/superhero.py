@@ -409,7 +409,9 @@ class Fig:
         hq = q * (0.82 if fem else 1.0) * p.get('handS', 1.0)
         fr = 0.85 if fem else 1.0                        # finger slimness
         R = self.hand_frame(sd)
-        ts = (1 if sd == 'L' else -1) * getattr(self, 'THUMB_FLIP', 1)   # thumb side in local x (palm faces -z); subclasses can mirror it
+        # thumb side in local x (palm faces -z). Figures face +z, so the 'L' joints (at -x) are the ANATOMICAL RIGHT
+        # side: its thumb goes to local -x (hand_frame is right-handed). Was mirrored before 1.12.2.
+        ts = -1 if sd == 'L' else 1
         wr = J['wr' + sd]
         L = lambda v: wr + R @ (np.asarray(v, float) * hq)
         B = S.SDF()

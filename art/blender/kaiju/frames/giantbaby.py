@@ -64,7 +64,7 @@ def open_hand(B, sd):
     R = hand_frame(sd)
     w = WR[sd]
     L = lambda v: w + R @ np.asarray(v, float)
-    ts = 1 if sd == 'L' else -1      # thumb side (local x)
+    ts = -1 if sd == 'L' else 1      # thumb side (local x); 'L' (at -x) is the anatomical right hand
     B.ell(L((0, 0.38, 0.0)), A(0.46, 0.44, 0.24), rot=R, k=0.18)                       # palm
     B.ell(L((ts * 0.32, 0.22, -0.08)), A(0.2, 0.26, 0.18), rot=R, k=0.1)                 # thumb pad
     tips = []

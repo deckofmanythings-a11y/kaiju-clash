@@ -3,6 +3,13 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.12.2', date: '2026-11-21',
+    fixed: [
+      'Phones: the menu (Hangar, Lab, Arena, Ladder, Replays, Codex) was squeezed out of sight when the daily-limit badge showed. It now has its own row.',
+      'Giant Baby, Colossal Woman and a few other models: left and right hands were swapped. Every hand is now on the correct arm.',
+    ],
+  },
+  {
     v: '1.12.1', date: '2026-11-21',
     fixed: ['Colossal Woman: her left and right hands were swapped (thumbs on the wrong side). Each hand is now on the correct arm.'],
   },
