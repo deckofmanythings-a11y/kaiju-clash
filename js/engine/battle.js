@@ -3,14 +3,16 @@
 import { createRng, fnv1a } from './rng.js';
 import { FRAME_BY_ID, STATS, effectiveStats, PASSIVES } from '../data/frames.js';
 import { ABILITY_BY_ID, STATUSES, abilityAvailableTo, MAX_EQUIPPED } from '../data/abilities.js';
-import { ENV_BY_ID } from '../data/environments.js';
+import * as ENVS from '../data/environments.js';   // namespace import: a stale cached copy without LEGACY_ENV_BY_ID must not break module linking
+const ENV_BY_ID = ENVS.ENV_BY_ID, LEGACY_ENV_BY_ID = ENVS.LEGACY_ENV_BY_ID || ENVS.ENV_BY_ID;
 import { INJURY_BY_ID, MAX_INJURIES, applyInjuries } from '../data/injuries.js';
 import { sanitizeTune, modAbility } from '../data/finetune.js';
 
-export const ENGINE_VERSION = 5; // v2: persistent injuries lower stats. v3: frame passives (rare Wild enemies). v4: Fine Tune. v5: 11 new frames, 4 new passives, drain
+export const ENGINE_VERSION = 6; // v6: fair arenas (equal favored/hindered frames, 2 new arenas); older records use LEGACY_ENVIRONMENTS. v2: persistent injuries lower stats. v3: frame passives (rare Wild enemies). v4: Fine Tune. v5: 11 new frames, 4 new passives, drain
 // Older versions whose records replay identically on this engine (v4 only adds optional Fine Tune data; v5 only adds
 // new frames / passives / the `drain` ability field, none of which existed in older records).
-export const COMPAT_VERSIONS = [3, 4, 5];
+// v6 changes arenas, but records carry their engine version and replay with the arena rules of their era.
+export const COMPAT_VERSIONS = [3, 4, 5, 6];
 export const engineCompatible = (v) => COMPAT_VERSIONS.includes(v);
 const MAX_ACTIONS = 80;          // 40 rounds
 const GAUGE = 1000;              // initiative threshold
@@ -52,6 +54,11 @@ export function sanitizeSnapshot(s) {
 function envStats(snapshot, env) {
   const frame = FRAME_BY_ID[snapshot.frame];
   const st = applyInjuries(effectiveStats(snapshot), snapshot.injuries);
+  if (env.favored) {
+    const m = env.favored.includes(snapshot.frame) ? env.mods?.favored : env.hindered.includes(snapshot.frame) ? env.mods?.hindered : null;
+    if (m) for (const k of Object.keys(m)) st[k] = pct(st[k], m[k]);
+    return st;
+  }
   const mods = env.tagMods || {};
   let matched = false;
   for (const tag of Object.keys(mods)) {
@@ -63,9 +70,10 @@ function envStats(snapshot, env) {
   return st;
 }
 
-export function simulateBattle({ seed, env: envId, a, b }) {
+export function simulateBattle({ seed, env: envId, a, b, v = ENGINE_VERSION }) {
   seed = seed >>> 0;
-  const env = ENV_BY_ID[envId] || ENV_BY_ID.city;
+  v = v < 6 ? v : ENGINE_VERSION;
+  const env = v < 6 ? (LEGACY_ENV_BY_ID[envId] || LEGACY_ENV_BY_ID.city) : (ENV_BY_ID[envId] || ENV_BY_ID.city);
   const rng = createRng(seed);
   const snaps = [sanitizeSnapshot(a), sanitizeSnapshot(b)];
   const events = [];
@@ -274,11 +282,13 @@ export function simulateBattle({ seed, env: envId, a, b }) {
   function hazard(actions) {
     const hz = env.hazard;
     if (!hz || actions % (hz.every * 2) !== 0) return;
-    let targets = F.filter(f => !f.frame.tags.some(t => (hz.immuneTags || []).includes(t)));
+    let targets = env.favored ? F.filter(f => !env.favored.includes(f.s.frame))
+      : F.filter(f => !f.frame.tags.some(t => (hz.immuneTags || []).includes(t)));
     if (hz.random && targets.length > 1) targets = [rng.pick(targets)];
     if (!targets.length) return;
     const hits = targets.map(f => {
-      const d = pct(pct(pct(f.maxHp, hz.pct), typeMult(hz.type)), resistOf(f, hz.type));
+      // v6 arenas: flat % of max HP for everyone it hits (resistances would favor some frames over others).
+      const d = env.favored ? pct(f.maxHp, hz.pct) : pct(pct(pct(f.maxHp, hz.pct), typeMult(hz.type)), resistOf(f, hz.type));
       const { dealt } = damage(f, Math.max(1, d));
       return { tg: f.i, dmg: dealt, hp: f.hp };
     });
@@ -354,7 +364,7 @@ export function simulateBattle({ seed, env: envId, a, b }) {
   emit({ t: 'end', winner, reason });
 
   return {
-    v: ENGINE_VERSION, seed, env: env.id, fighters: snaps,
+    v, seed, env: env.id, fighters: snaps,
     meta: F.map(f => ({ maxHp: f.maxHp, stats: f.stats })),
     events, winner, reason, turns: actions, finalHp: F.map(f => f.hp), hash: fnv1a(JSON.stringify(events)),
   };
@@ -363,6 +373,6 @@ export function simulateBattle({ seed, env: envId, a, b }) {
 // Re-simulate a stored record and confirm it matches. Returns { ok, record }.
 export function verifyReplay(record) {
   if (!engineCompatible(record.v)) return { ok: false, stale: true, record };
-  const re = simulateBattle({ seed: record.seed, env: record.env, a: record.fighters[0], b: record.fighters[1] });
+  const re = simulateBattle({ seed: record.seed, env: record.env, a: record.fighters[0], b: record.fighters[1], v: record.v });
   return { ok: re.hash === record.hash, record: re };
 }

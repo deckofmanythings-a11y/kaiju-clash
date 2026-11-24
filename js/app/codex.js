@@ -3,12 +3,14 @@
 // Rare Wild encounters are easter eggs: their frames, abilities and passives are NEVER listed here.
 import { FRAMES, STATS, STAT_NAMES, MAX_STAT_LEVEL } from '../data/frames.js?v=5';
 import { ABILITIES, STATUSES, DMG_TYPES, MAX_EQUIPPED, abilityAvailableTo, abilityScope } from '../data/abilities.js?v=5';
-import { ENVIRONMENTS } from '../data/environments.js';
+import { ENVIRONMENTS, ARENA_MODS } from '../data/environments.js?v=6';
 import { INJURIES, CONDITIONS, CRITICAL_AT, MAX_INJURIES, HEAL_COST, MAX_HEAL_MIN } from '../data/injuries.js';
 import { INJURY_ODDS } from '../engine/aftermath.js';
 import { REWARD, STARTING_BIO, statUpgradeCost } from '../data/economy.js?v=5';
 import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS } from '../data/finetune.js';
 
+const FRAME_NAME = Object.fromEntries(FRAMES.map(f => [f.id, f.name]));
+const modText = (m) => Object.entries(m).map(([s, v]) => `${STAT_NAMES[s]} ${v >= 100 ? '+' : ''}${v - 100}%`).join(', ');
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const pct = (v, p) => Math.floor((v * p) / 100);
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
@@ -158,17 +160,20 @@ export function codexHtml({ stats = null, frameId = null, kaijuName = '' } = {})
     </details>
 
     <details class="cx" id="cx-env"><summary>Arenas</summary>
+      <p>Every arena <b>favors</b> exactly 5 frames and <b>hinders</b> exactly 5; everyone else is neutral. Across all ${ENVIRONMENTS.length} arenas, every frame is favored exactly as many times as it is hindered.</p>
+      <ul>
+        <li><b>Favored</b>: ${modText(ARENA_MODS.favored)}, and immune to the arena's hazard.</li>
+        <li><b>Hindered</b>: ${modText(ARENA_MODS.hindered)}.</li>
+      </ul>
       ${ENVIRONMENTS.map(e => {
-        const mods = Object.entries(e.tagMods || {}).map(([tag, m]) => `${tag === '_other' ? 'everyone else' : cap(tag) + ' frames'}: ${Object.entries(m).map(([s, v]) => `${STAT_NAMES[s]} ×${v}%`).join(', ')}`);
-        const types = Object.entries(e.typeMult || {}).map(([t, v]) => `${cap(t)} ×${v}%`);
-        const fx = Object.entries(e.fxMult || {}).map(([t, v]) => `${t === 'grab' ? 'Grab' : cap(t)} moves ×${v}%`);
-        const hz = e.hazard;
-        return `<div class="card"><b>${e.name}</b>
-          <div class="rec">${[...mods, ...types, ...fx, e.accMod ? `Accuracy ${e.accMod > 0 ? '+' : ''}${e.accMod} for everyone` : ''].filter(Boolean).join(' · ') || 'No modifiers.'}</div>
-          ${hz ? `<div class="rec">Hazard <b>${hz.name}</b>: every ${hz.every} rounds, ${hz.random ? 'one random Kaiju takes' : 'every Kaiju takes'} ${hz.pct}% of max HP as ${hz.type} damage (× resistance and arena modifier; ignores armor)${hz.status ? `, with a ${hz.status.chance}% chance of ${STATUSES[hz.status.status].name} for ${hz.status.turns} turns` : ''}. Immune: ${hz.immuneTags.map(cap).join(', ')} frames.</div>` : ''}
+        const hz = e.hazard, names = (ids) => ids.map(id => FRAME_NAME[id] || id).join(', ');
+        return `<div class="card"><b>${e.name}</b> <span class="rec">${e.blurb}</span>
+          <div class="rec"><span class="arena-up">▲ Favored</span> (${e.favWhy}): ${names(e.favored)}</div>
+          <div class="rec"><span class="arena-dn">▼ Hindered</span> (${e.hindWhy}): ${names(e.hindered)}</div>
+          ${hz ? `<div class="rec">Hazard <b>${hz.name}</b>: every ${hz.every} rounds, ${hz.random ? 'one random non-favored Kaiju takes' : 'every non-favored Kaiju takes'} ${hz.pct}% of its max HP (ignores armor and resistances)${hz.status ? `, with a ${hz.status.chance}% chance of ${STATUSES[hz.status.status].name} for ${hz.status.turns} turns` : ''}.</div>` : ''}
         </div>`;
       }).join('')}
-      <p class="rec">Frame tags: ${FRAMES.map(f => `${f.name} (${f.tags.join(', ')})`).join(' · ')}</p>
+      <p class="rec"><b>By frame:</b> ${FRAMES.map(f => `${f.name} ▲ ${ENVIRONMENTS.filter(e => e.favored.includes(f.id)).map(e => e.name).join(', ')} ▼ ${ENVIRONMENTS.filter(e => e.hindered.includes(f.id)).map(e => e.name).join(', ')}`).join(' · ')}</p>
     </details>
 
     <details class="cx" id="cx-ai"><summary>How Kaiju choose moves</summary>

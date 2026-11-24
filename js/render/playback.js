@@ -13,7 +13,7 @@
 
 import * as THREE from 'three';
 import { ABILITY_BY_ID, STATUSES } from '../data/abilities.js?v=5';
-import { softTexture } from './arena.js';
+import { softTexture } from './arena.js?v=6';
 
 const V3 = THREE.Vector3;
 const PI = Math.PI;

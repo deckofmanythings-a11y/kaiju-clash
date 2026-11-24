@@ -286,3 +286,7 @@ details.math > summary { cursor: pointer; font-size: 13px; font-weight: 600; col
 }
 @media (max-width: 380px) { #nav button { padding: 6px 5px; font-size: 12.5px; } }
 @media (max-width: 340px) { #hud, #panel.busy::after { top: 100px; } }   /* 320px phones: BIO wraps to a third row */
+
+/* Arena perks (1.13.0) */
+.arena-up { color: #6fe08a; font-weight: 600; white-space: nowrap; }
+.arena-dn { color: #ff7a7a; font-weight: 600; white-space: nowrap; }

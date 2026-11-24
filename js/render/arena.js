@@ -9,7 +9,7 @@
 // }
 
 import * as THREE from 'three';
-import { ENV_BY_ID } from '../data/environments.js';
+import { ENV_BY_ID } from '../data/environments.js?v=6';
 
 const V3 = THREE.Vector3;
 const v = (x = 0, y = 0, z = 0) => new V3(x, y, z);
@@ -241,17 +241,19 @@ export function buildArena(envId, opts = {}) {
   group.add(hemi, sun, sun.target);
   if (look.props === 'ice') { hemi.intensity *= 0.55; sun.intensity *= 0.6; }
   if (look.props === 'dunes') { hemi.intensity *= 0.85; }
+  if (look.props === 'lunar') { hemi.intensity *= 0.45; sun.intensity *= 1.35; }   // airless: hard light, dark shadows
+  if (look.props === 'jungle') { hemi.intensity *= 0.9; sun.intensity *= 0.75; }
   const baseHemi = hemi.intensity, baseSun = sun.intensity;
 
   // ---- sky
   const skyTop = skyC.clone().multiplyScalar(night ? 0.55 : 0.85);
   const sky = skyDome(skyTop, fogC, groundC.clone().lerp(fogC, 0.5), night);
   group.add(sky);
-  arena.fog = new THREE.Fog(fogC, look.props === 'dunes' ? 50 : 80, 300);
+  arena.fog = new THREE.Fog(fogC, look.props === 'dunes' ? 50 : look.props === 'jungle' ? 45 : look.props === 'lunar' ? 140 : 80, look.props === 'jungle' ? 230 : look.props === 'lunar' ? 520 : 300);
   const baseFog = { near: arena.fog.near, far: arena.fog.far, color: fogC.clone() };
 
   // ---- ground
-  const groundTex = noiseTexture(look.ground, look.props === 'ice' ? 0.06 : 0.16, 256, 5, look.props === 'dunes');
+  const groundTex = noiseTexture(look.ground, look.props === 'ice' ? 0.06 : look.props === 'lunar' ? 0.1 : 0.16, 256, 5, look.props === 'dunes');
   groundTex.repeat.set(40, 40);
   disposables.push(groundTex);
   const groundMat = new THREE.MeshStandardMaterial({ color: look.props === 'ice' ? '#b8c4d0' : '#ffffff', map: groundTex, roughness: look.props === 'ice' ? 0.35 : 0.95, metalness: 0 });
@@ -265,6 +267,21 @@ export function buildArena(envId, opts = {}) {
       const fade = THREE.MathUtils.smoothstep(d, 28, 70);
       const h = (Math.sin(x * 0.045 + Math.sin(z * 0.02) * 2) * 4 + Math.sin(z * 0.07 + x * 0.01) * 2.5 + 3) * fade;
       p.setY(i, h);
+    }
+    geo.computeVertexNormals();
+    ground = new THREE.Mesh(geo, groundMat);
+  } else if (look.props === 'lunar') {
+    // cratered regolith: bowl-shaped dents with raised rims, kept flat where the fighters stand
+    const geo = new THREE.PlaneGeometry(700, 700, 180, 180); geo.rotateX(-PI / 2);
+    const p = geo.attributes.position, cr = mkRng(99), craters = [];
+    for (let i = 0; i < 46; i++) { const a = cr() * PI * 2, r = 34 + cr() * 260; craters.push([Math.cos(a) * r, Math.sin(a) * r, 5 + cr() * (r > 120 ? 34 : 14)]); }
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), z = p.getZ(i); let h = 0;
+      for (const [cx, cz, cr2] of craters) {
+        const d = Math.hypot(x - cx, z - cz) / cr2;
+        if (d < 1) h -= (1 - d * d) * cr2 * 0.22; else if (d < 1.45) h += Math.sin((d - 1) / 0.45 * PI) * cr2 * 0.07;
+      }
+      p.setY(i, h * THREE.MathUtils.smoothstep(Math.hypot(x, z), 24, 46));
     }
     geo.computeVertexNormals();
     ground = new THREE.Mesh(geo, groundMat);
@@ -286,7 +303,7 @@ export function buildArena(envId, opts = {}) {
   const bursts = new THREE.Points(bGeo, bMat); bursts.frustumCulled = false;
   group.add(bursts);
   let bNext = 0;
-  const impactColor = { buildings: '#9a9488', water: '#e8f4ff', storm: '#c8d8e0', lava: '#ff7a2a', ice: '#ffffff', dunes: '#d8b078', studio: '#9aa0aa' }[look.props] || '#aaaaaa';
+  const impactColor = { buildings: '#9a9488', water: '#e8f4ff', storm: '#c8d8e0', lava: '#ff7a2a', ice: '#ffffff', dunes: '#d8b078', studio: '#9aa0aa', jungle: '#5a6a30', lunar: '#b8b8be' }[look.props] || '#aaaaaa';
   arena.groundImpact = (pos, power = 1, color) => {
     const c = col(color || impactColor);
     const n = Math.floor(40 * power);
@@ -308,7 +325,7 @@ export function buildArena(envId, opts = {}) {
       any = true;
       bLife[i] -= sdt;
       if (bLife[i] <= 0) { bPos[i * 3 + 1] = -999; continue; }
-      bVel[i * 3 + 1] -= 16 * sdt;
+      bVel[i * 3 + 1] -= (look.props === 'lunar' ? 5 : 16) * sdt;
       bVel[i * 3] *= 1 - sdt * 1.5; bVel[i * 3 + 2] *= 1 - sdt * 1.5;
       bPos[i * 3] += bVel[i * 3] * sdt; bPos[i * 3 + 1] += bVel[i * 3 + 1] * sdt; bPos[i * 3 + 2] += bVel[i * 3 + 2] * sdt;
       if (bPos[i * 3 + 1] < arena.fighterY) { bPos[i * 3 + 1] = arena.fighterY; bVel[i * 3 + 1] *= -0.2; }
@@ -673,6 +690,104 @@ export function buildArena(envId, opts = {}) {
     });
   }
 
+  // ---- jungle: giant trees, hanging vines, ferns, drifting spores
+  if (look.props === 'jungle') {
+    const barkMat = new THREE.MeshStandardMaterial({ color: '#4a3826', roughness: 0.95, flatShading: true });
+    const leafMat = new THREE.MeshStandardMaterial({ color: '#2f5a26', roughness: 0.9, flatShading: true });
+    const leafMat2 = new THREE.MeshStandardMaterial({ color: '#4a7a2c', roughness: 0.9, flatShading: true });
+    const vineMat = new THREE.MeshStandardMaterial({ color: '#3d5f22', roughness: 0.9 });
+    const trees = [];
+    for (let i = 0; i < 80 && trees.length < 34; i++) {
+      const a = rng() * PI * 2, r = 36 + rng() * 170, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (z > 4 && Math.abs(x) < 60) continue;          // keep the camera side open
+      trees.push([x, z, 0.7 + rng() * 0.8]);
+    }
+    for (const [x, z, k] of trees) {
+      const h = 55 * k, tr = 2.6 * k;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(tr * 0.7, tr * 1.25, h, 8, 4), barkMat);
+      trunk.position.set(x, h / 2, z); trunk.rotation.z = (rng() - 0.5) * 0.08; trunk.castShadow = true; group.add(trunk);
+      for (let j = 0; j < 4; j++) {   // buttress roots
+        const root = new THREE.Mesh(new THREE.ConeGeometry(tr * 0.7, tr * 3.2, 5), barkMat);
+        const ra = j * PI / 2 + rng(); root.position.set(x + Math.cos(ra) * tr * 1.2, tr * 0.9, z + Math.sin(ra) * tr * 1.2);
+        root.rotation.set(Math.sin(ra) * 0.9, 0, -Math.cos(ra) * 0.9); group.add(root);
+      }
+      for (let j = 0; j < 3; j++) {
+        const c = new THREE.Mesh(displacedRock(1, (Math.abs(x * 7) + j) | 0, 14 * k + rng() * 6, 7 * k + rng() * 3, 14 * k + rng() * 6), j % 2 ? leafMat2 : leafMat);
+        c.position.set(x + (rng() - 0.5) * 10 * k, h - 2 + j * 4 * k, z + (rng() - 0.5) * 10 * k); c.castShadow = true; group.add(c);
+      }
+      if (rng() < 0.7) for (let j = 0; j < 3; j++) {   // hanging vines
+        const top = v(x + (rng() - 0.5) * 14, h - 4, z + (rng() - 0.5) * 14), len = 14 + rng() * 24;
+        const curve = new THREE.CatmullRomCurve3([top, top.clone().add(v(rng() - 0.5, -len * 0.5, rng() - 0.5)), top.clone().add(v((rng() - 0.5) * 3, -len, (rng() - 0.5) * 3))]);
+        group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 10, 0.3, 4, false), vineMat));
+      }
+    }
+    // ferns: open cones flipped so they splay upward
+    // fern: 7 arching leaf blades fanned around the centre, built into one geometry
+    const fp = [], fi = [];
+    for (let b = 0; b < 7; b++) {
+      const ang = b / 7 * PI * 2, ca = Math.cos(ang), sa = Math.sin(ang), base = fp.length / 3;
+      for (let j = 0; j <= 4; j++) {
+        const t = j / 4, r = t * 1.0, y = Math.sin(t * PI * 0.8) * 0.9, w = Math.sin(t * PI) * 0.18 + 0.02;
+        fp.push(ca * r - sa * w, y, sa * r + ca * w, ca * r + sa * w, y, sa * r - ca * w);
+        if (j) { const k = base + (j - 1) * 2; fi.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+      }
+    }
+    const fernGeo = new THREE.BufferGeometry(); fernGeo.setAttribute('position', new THREE.Float32BufferAttribute(fp, 3)); fernGeo.setIndex(fi); fernGeo.computeVertexNormals();
+    const ferns = new THREE.InstancedMesh(fernGeo, new THREE.MeshStandardMaterial({ color: '#4a7a2c', roughness: 0.9, flatShading: true, side: THREE.DoubleSide }), 160);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s3 = new V3(), p3 = new V3();
+    let n = 0;
+    for (let i = 0; i < 600 && n < 160; i++) {
+      const a = rng() * PI * 2, r = 24 + rng() * 120, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (z > 6 && Math.abs(x) < 40) continue;
+      const w = 2 + rng() * 3.5;
+      ferns.setMatrixAt(n++, m4.compose(p3.set(x, 0, z), q.setFromEuler(new THREE.Euler(0, rng() * 6, 0)), s3.set(w, w * (0.6 + rng() * 0.5), w)));
+    }
+    ferns.count = n; ferns.castShadow = true; group.add(ferns);
+    const spores = particleField({ count: 700, area: 120, height: 40, color: '#d8ff9a', size: 0.35, opacity: 0.7, additive: true, seed: 41, zMax: 12 });
+    group.add(spores);
+    updaters.push((dt, t) => {
+      const p = spores.geometry.attributes.position.array;
+      for (let i = 0; i < p.length / 3; i++) { p[i * 3] += Math.sin(t * 0.3 + i) * dt * 0.8; p[i * 3 + 1] += Math.sin(t * 0.5 + i * 1.3) * dt * 0.5; }
+      spores.geometry.attributes.position.needsUpdate = true;
+    });
+  }
+
+  // ---- lunar: the Earth overhead, stars, boulders, an old lander
+  if (look.props === 'lunar') {
+    const earth = new THREE.Group();
+    // one sphere, vertex-coloured: ocean, continents, polar caps, with a darker night side
+    const globeGeo = new THREE.SphereGeometry(26, 64, 40), gp = globeGeo.attributes.position, gc = new Float32Array(gp.count * 3);
+    for (let i = 0; i < gp.count; i++) {
+      const x = gp.getX(i), y = gp.getY(i), z = gp.getZ(i);
+      const n2 = Math.sin(x * 0.21 + Math.sin(z * 0.13) * 2) * Math.cos(y * 0.27 + z * 0.09) + Math.sin(z * 0.31 - y * 0.12) * 0.4;
+      let c = Math.abs(y) > 22 ? [0.92, 0.95, 1] : n2 > 0.25 ? [0.3, 0.52, 0.22] : n2 > 0.18 ? [0.72, 0.64, 0.42] : [0.12, 0.34, 0.72];
+      const lit = THREE.MathUtils.clamp(0.25 + (x * 0.7 + y * 0.35 + z * 0.6) / 26 * 0.9, 0.12, 1);
+      gc[i * 3] = c[0] * lit; gc[i * 3 + 1] = c[1] * lit; gc[i * 3 + 2] = c[2] * lit;
+    }
+    globeGeo.setAttribute('color', new THREE.BufferAttribute(gc, 3));
+    const globe = new THREE.Mesh(globeGeo, new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(29, 32, 24), new THREE.MeshBasicMaterial({ color: '#7fb6ff', fog: false, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, side: THREE.BackSide, depthWrite: false }));
+    earth.add(globe, halo);
+    earth.position.set(-70, 150, -330); earth.rotation.z = 0.4;
+    group.add(earth);
+    const stars = particleField({ count: 1400, area: 900, height: 400, color: '#ffffff', size: 1.1, opacity: 0.9, seed: 51 });
+    stars.material.fog = false; stars.position.set(0, 40, -260); group.add(stars);
+    const rockMat = new THREE.MeshStandardMaterial({ color: '#8a8a90', roughness: 1, flatShading: true });
+    for (let i = 0; i < 26; i++) {
+      const a = rng() * PI * 2, r = 30 + rng() * 140, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (z > 6 && Math.abs(x) < 50) continue;
+      const sz = 1.5 + rng() * (r > 80 ? 9 : 4);
+      const m = new THREE.Mesh(displacedRock(1, i + 30, sz, sz * 0.7, sz), rockMat); m.position.set(x, sz * 0.2, z); m.castShadow = true; group.add(m);
+    }
+    const lander = new THREE.Group(), gold = new THREE.MeshStandardMaterial({ color: '#c9a640', metalness: 0.7, roughness: 0.35 }), grey = new THREE.MeshStandardMaterial({ color: '#cfd0d4', roughness: 0.6 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(4, 2.6, 4), gold); body.position.y = 3; lander.add(body);
+    const cab = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2, 2.4, 6), grey); cab.position.y = 5.5; lander.add(cab);
+    for (let j = 0; j < 4; j++) { const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 4.2, 5), grey); const a = j * PI / 2 + PI / 4; leg.position.set(Math.cos(a) * 2.8, 1.6, Math.sin(a) * 2.8); leg.rotation.set(Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5); lander.add(leg); }
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.5), new THREE.MeshStandardMaterial({ color: '#e8e8ea', side: THREE.DoubleSide })); flag.position.set(5, 4.6, 0); lander.add(flag);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 5.5, 4), grey); pole.position.set(3.8, 2.75, 0); lander.add(pole);
+    lander.position.set(58, 0, -52); lander.rotation.y = 0.6; lander.traverse(o => { if (o.isMesh) o.castShadow = true; }); group.add(lander);
+  }
+
   // ---- studio: platform + rim
   if (look.props === 'studio') {
     const plat = new THREE.Mesh(new THREE.CylinderGeometry(16, 17, 0.6, 64), new THREE.MeshStandardMaterial({ color: '#2a2f3a', roughness: 0.55, metalness: 0.3 }));
@@ -721,6 +836,34 @@ export function buildArena(envId, opts = {}) {
       surgeTo(1, '#d8a868');
       arena.flash('#ffd8a0', 0.35, 900);
       return 1000;
+    }
+    if (key.includes('meteor')) {
+      const rockMat = new THREE.MeshStandardMaterial({ color: '#3a2a20', emissive: '#ff8a3a', emissiveIntensity: 2.2 });
+      const dests = targets.length ? targets.map(t => t.clone()) : [v(0, 0, 0)];
+      for (let i = 0; i < 5; i++) dests.push(v((Math.random() - 0.5) * 80, 0, -10 - Math.random() * 50));
+      dests.forEach((d, i) => {
+        const m = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1 + Math.random() * 0.8, 0), rockMat);
+        const from = d.clone().add(v(60 + Math.random() * 20, 110, -40)), delay = i < targets.length ? 0 : Math.random() * 0.6, dur = 0.9;
+        addTransient(m, (tt) => {
+          const k = Math.min(1, Math.max(0, (tt - delay) / dur));
+          m.position.lerpVectors(from, d, k); m.visible = tt > delay; m.rotation.x += 0.2;
+          if (k >= 1) { arena.groundImpact(d, 1.3, '#d8d0c8'); arena.flash('#ffd0a0', 0.4, 300); return false; }
+          return true;
+        });
+      });
+      return 1200;
+    }
+    if (key.includes('vine')) {
+      const vineMat = new THREE.MeshStandardMaterial({ color: '#4a7a26', roughness: 0.8 });
+      for (const t of targets) for (let j = 0; j < 4; j++) {
+        const a = j * PI / 2 + Math.random(), base = t.clone().setY(0).add(v(Math.cos(a) * 5, 0, Math.sin(a) * 5)), c = t.clone().setY(0);
+        const curve = new THREE.CatmullRomCurve3([base, base.clone().lerp(c, 0.5).add(v(0, 7, 0)), c.clone().add(v(Math.cos(a + 1.5) * 2.5, 12, Math.sin(a + 1.5) * 2.5)), c.clone().add(v(-Math.cos(a) * 1.5, 18, -Math.sin(a) * 1.5))]);
+        const m = new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.55, 5, false), vineMat);
+        m.scale.y = 0.01;
+        addTransient(m, (tt) => { m.scale.y = Math.max(0.01, Math.min(1, tt / 0.35) * (tt > 1.2 ? 1 - (tt - 1.2) / 0.4 : 1)); return tt < 1.6; });
+      }
+      for (const t of targets) arena.groundImpact(t, 0.7, '#5a6a30');
+      return 900;
     }
     if (key.includes('lightning') || type === 'electric') {
       const list = targets.length ? targets : [v(0, 0, 0)];

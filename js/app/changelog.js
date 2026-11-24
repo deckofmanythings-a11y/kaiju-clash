@@ -3,6 +3,18 @@
 // Rare Wild encounters are easter eggs: NEVER name them (or their signature moves) in player-facing text.
 export const CHANGELOG = [
   {
+    v: '1.13.0', date: '2026-11-23',
+    added: [
+      'Two new arenas: Verdant Hollow, a primeval jungle with strangling vines, and Sea of Tranquility, a crater on the Moon with meteor showers.',
+      'Fight cards and the battle screen now show when a Kaiju is ▲ favored or ▼ hindered by the arena.',
+    ],
+    changed: [
+      'Arenas are now fair. Every arena favors exactly 5 frames and hinders exactly 5, and every frame is favored exactly as many times as it is hindered. Before, some frames were hurt in more arenas than they were helped (Lepidra was one of them) while others had no downside at all.',
+      'Favored: +10% Might, Energy and Armor, and immune to the arena hazard. Hindered: -10% Might, Energy and Armor. Every arena now has a hazard, and hazards deal flat damage that ignores resistances. The Codex lists who is favored and hindered where.',
+      'Fights from before this update still replay exactly as they happened, on the old arena rules.',
+    ],
+  },
+  {
     v: '1.12.3', date: '2026-11-21',
     fixed: ['Dire Lycan and Giant Baby: teeth now grow out of the gums and jaws instead of floating just off them.'],
   },

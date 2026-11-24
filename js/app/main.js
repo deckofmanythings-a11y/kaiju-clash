@@ -1,19 +1,19 @@
 import { FRAMES, FRAME_BY_ID, STATS, STAT_NAMES, STAT_BLURBS, MAX_STAT_LEVEL, effectiveStats, PASSIVES, WILD_FRAMES } from '../data/frames.js?v=5';   // ?v=5: 1.12.0 added 11 frames; a cached copy would crash on them
 import { ABILITY_BY_ID, STATUSES, MAX_EQUIPPED, abilitiesForFrame, abilityScope } from '../data/abilities.js?v=5';
-import { ENV_BY_ID, ENVIRONMENTS } from '../data/environments.js';
+import { ENV_BY_ID, ENVIRONMENTS, LEGACY_ENV_BY_ID, arenaSide } from '../data/environments.js?v=6';   // versioned: 1.13.0 arenas
 import { statUpgradeCost, powerRating, battleReward, RARE_REWARD_MULT } from '../data/economy.js?v=5';
-import { simulateBattle, verifyReplay, ENGINE_VERSION, engineCompatible } from '../engine/battle.js?v=5';   // versioned: cached copies predate the v5 frames (bump with ENGINE_VERSION)
+import { simulateBattle, verifyReplay, ENGINE_VERSION, engineCompatible } from '../engine/battle.js?v=6';   // versioned: cached copies predate the v5 frames (bump with ENGINE_VERSION)
 import { randomSeed, createRng } from '../engine/rng.js';
 import { INJURY_BY_ID, conditionOf, deathChance, healCost, applyInjuries } from '../data/injuries.js';
 import * as codes from './codes.js';
 import * as api from './api.js';
 import { CHANGELOG } from './changelog.js';
-import { codexHtml, renderAbilityList, statMath, abilityMath } from './codex.js';
+import { codexHtml, renderAbilityList, statMath, abilityMath } from './codex.js?v=6';   // versioned: 1.13.0 arena format
 import { FT_ELO, FT_UNLOCK_COST, TUNE_STEP, TUNE_MAX, TUNE_MAX_PTS, tunePointCost, MOD_COST, RETUNE_COST, MODS, MOD_IDS, modAllowed, modAbility, allocNet, isRetune } from '../data/finetune.js?v=2';   // versioned: the 1.11.0 copy may be cached without isRetune
 // Shown in the top bar. Bump on every push, together with the ?v= on main.js in index.html,
 // and add a player-facing entry to js/app/changelog.js.
 // Minor = feature milestone (1.1 online ladder, 1.2 injuries, 1.3 rare enemies), patch = fixes.
-const APP_VERSION = '1.12.3';
+const APP_VERSION = '1.13.0';
 
 // Version line doubles as the changelog button; a dot marks updates you haven't opened yet.
 const SEEN_KEY = 'kb-seen-version';
@@ -39,6 +39,9 @@ function showChangelog() {
 document.getElementById('whatsnew').addEventListener('click', showChangelog);
 
 const $ = (s, r = document) => r.querySelector(s);
+// Arena perk for a frame, as a short badge (v6+ arenas only; legacy records have no favored/hindered lists).
+const ARENA_BADGE = { 1: '<span class="arena-up">▲ favored</span>', '-1': '<span class="arena-dn">▼ hindered</span>' };
+const arenaBadge = (env, frameId) => ARENA_BADGE[arenaSide(env, frameId)] || '';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const panel = $('#panel'), hud = $('#hud'), modal = $('#modal');
 const NEG = new Set(['burn', 'poison', 'bleed', 'stun', 'bind', 'slow', 'blind', 'weaken', 'sunder']);
@@ -165,7 +168,7 @@ function refreshShowcase() {
 }
 async function initStage() {
   try {
-    const [st, pb] = await Promise.all([import('../render/stage.js'), import('../render/playback.js')]);
+    const [st, pb] = await Promise.all([import('../render/stage.js?v=6'), import('../render/playback.js?v=6')]);
     stage = st.createStage($('#stage'));
     playBattle = pb.playBattle;
     await import('../render/wild-models.js').catch((e) => console.warn('rare enemy models unavailable', e));
@@ -498,7 +501,8 @@ async function arena() {
         <div class="rec">${(s.injuries || []).length ? condBadge(s.injuries) + ' ' : ''}${FRAME_BY_ID[s.frame].name}${o.kind === 'player' ? ' · ' + esc(s.owner) + (o.record ? ` · ${o.record[0]}W ${o.record[1]}L` : '') : ''} · Power ${rr}</div>
         <div class="rec">${s.abilities.map(a => ABILITY_BY_ID[a]?.name).filter(Boolean).join(', ') || 'Basic attack only'}</div>
         ${pas ? `<div class="rec" style="margin-top:4px"><b style="color:var(--gold)">${pas.name}:</b> ${pas.desc}</div>` : ''}
-        <div class="rec" style="margin:4px 0 8px">📍 ${e.name}: ${e.blurb}</div>
+        <div class="rec" style="margin:4px 0 8px">📍 ${e.name}: ${e.blurb}
+          ${arenaSide(e, k.frame) || arenaSide(e, s.frame) ? `<br>${arenaSide(e, k.frame) ? `${esc(k.name)} ${arenaBadge(e, k.frame)}` : ''}${arenaSide(e, k.frame) && arenaSide(e, s.frame) ? ' · ' : ''}${arenaSide(e, s.frame) ? `${esc(s.name)} ${arenaBadge(e, s.frame)}` : ''}` : ''}</div>
         <div class="row"><span class="rec grow">${left ? `Win ≈ ${battleReward('win', my, rr) * mult}${mult > 1 ? ' (×' + mult + ')' : ''} · Loss ${battleReward('loss', my, rr)} BIO${rr < my * 0.85 ? ' <span title="Rewards scale with opponent strength: weaker opponents pay less (down to 60%).">(weaker foe: reduced pay)</span>' : ''}` : '<b class="l">Unrated: 0 BIO</b>'}</span><button class="btn small" data-fight="${i}">Fight</button></div>
       </div>`;
     }).join('')}
@@ -628,7 +632,7 @@ function replayTags(h) {
     t.underdog = powerRating(w) * 100 <= powerRating(l) * (100 - UNDERDOG_PCT);
     if (h.seed != null && engineCompatible(h.engine_v)) {
       try {
-        const r = simulateBattle({ seed: Number(h.seed), env: h.env, a: h.fighters[0], b: h.fighters[1] });
+        const r = simulateBattle({ seed: Number(h.seed), env: h.env, a: h.fighters[0], b: h.fighters[1], v: h.engine_v });
         if (r.winner === h.winner) t.close = r.finalHp[h.winner] * 100 < r.meta[h.winner].maxHp * CLOSE_PCT;
       } catch { /* bad snapshot: no tag */ }
     }
@@ -713,7 +717,8 @@ function defenseReport() {
 function showBattle(record, { result, reward, elo, rated, replay, friendly, verified, battleId, aftermath, salvage, mySide = null, rare = false } = {}) {
   if (playing) { playing.stop(); playing = null; }
   panel.hidden = true; hud.hidden = false; modal.hidden = true;
-  const env = ENV_BY_ID[record.env];
+  const env = ENV_BY_ID[record.env] || ENV_BY_ID.city, legacy = record.v < 6;   // pre-v6 fights ran on the old arena rules
+  const envBlurb = legacy ? (LEGACY_ENV_BY_ID[record.env]?.blurb || env.blurb) : env.blurb;
   const hp = record.meta.map(m => m.maxHp), en = [20, 20];
   const sts = [new Map(), new Map()];
   hud.innerHTML = `
@@ -726,7 +731,7 @@ function showBattle(record, { result, reward, elo, rated, replay, friendly, veri
         <div class="sts"></div>
         <div class="sts injs">${(f.injuries || []).map(id => `<span class="st inj" title="${injText(id)}">${INJURY_BY_ID[id]?.name || id}</span>`).join('')}</div>
       </div>`).join('')}
-    <div class="envtag">${env.name}<br><small style="font-family:Inter;font-size:11px">${env.blurb}</small></div>
+    <div class="envtag">${env.name}<br><small style="font-family:Inter;font-size:11px">${envBlurb}${legacy ? '' : record.fighters.map(f => arenaSide(env, f.frame) ? `<br>${esc(f.name)} ${arenaBadge(env, f.frame)}` : '').join('')}</small></div>
     <div class="callout" style="opacity:0"></div>
     <div id="log"></div>
     <div class="ctrls">

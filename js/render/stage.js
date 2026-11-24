@@ -15,7 +15,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { buildKaijuModel, disposeObject, preloadKaijuModels, kaijuModelsReady } from './kaiju-model.js';
-import { buildArena } from './arena.js';
+import { buildArena } from './arena.js?v=6';
 
 const V3 = THREE.Vector3;
 
